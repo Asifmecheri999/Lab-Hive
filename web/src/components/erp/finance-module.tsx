@@ -165,11 +165,13 @@ export function FinanceModule({ token, role }: { token: string; role: string }) 
       if (r.status === 401) { signOut({ callbackUrl: "/login" }); return; }
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       setCapex(await r.json());
-      const [o, b, p, og] = await Promise.all([api("/api/finance/opex"), api("/api/finance/budget"), api("/api/procurement"), api("/api/org")]);
-      if (o.ok) setOpex(await o.json());
-      if (b.ok) setBudget(await b.json());
-      if (p.ok) setProcurement(await p.json());
-      if (og.ok) { const d = await og.json(); setFiscalStart(Number(d?.tenant?.fiscalYearStartMonth) || 1); }
+      // Secondary data loads resiliently — a blip on any one (e.g. mid-deploy) must not blank the whole page.
+      const safe = async (path: string) => { try { const res = await api(path); return res.ok ? await res.json() : null; } catch { return null; } };
+      const [o, b, p, og] = await Promise.all([safe("/api/finance/opex"), safe("/api/finance/budget"), safe("/api/procurement"), safe("/api/org")]);
+      if (o) setOpex(o);
+      if (b) setBudget(b);
+      if (p) setProcurement(p);
+      if (og) setFiscalStart(Number(og?.tenant?.fiscalYearStartMonth) || 1);
     } catch (e) { setErr(String((e as Error).message)); } finally { setLoading(false); }
   }, [api]);
   async function setFiscalMonth(m: number) {

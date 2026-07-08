@@ -237,7 +237,7 @@ export default function Landing() {
             </div>
             <div className="flex items-center gap-2 border-t border-white/5 pt-4">
               <div className="flex-1 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs text-gray-500">Ask about labs, inventory, schedules…</div>
-              <Link href="/login" className="rounded-lg bg-[#00C9A7] px-4 py-2 text-xs font-semibold text-[#0A1628]">Ask</Link>
+              <span className="rounded-lg bg-[#00C9A7] px-4 py-2 text-xs font-semibold text-[#0A1628] cursor-default select-none">Ask</span>
             </div>
           </div>
         </div>
@@ -248,9 +248,9 @@ export default function Landing() {
         <div className="mx-auto grid max-w-[1800px] items-center gap-12 px-6 lg:grid-cols-2">
           <div>
             <p className="text-sm font-semibold uppercase tracking-wider text-[#00C9A7]">Free &amp; open source</p>
-            <h2 className="mt-2 text-3xl font-bold sm:text-4xl">Built by a lab engineer. Free for every lab.</h2>
+            <h2 className="mt-2 text-3xl font-bold sm:text-4xl">Tired of running a lab on spreadsheets? LabSynch helps.</h2>
             <p className="mt-4 max-w-xl text-lg text-gray-600">
-              For over a decade I&apos;ve managed and run engineering laboratories. I got tired of holding it all together with a SharePoint page and a dozen spreadsheets — so I built LabSynch to make the work easier. It did. So I&apos;m sharing it, free.
+              I&apos;ve managed and run engineering laboratories for over a decade. If you&apos;re tired of holding it all together with dozens of spreadsheets and half-built workflows, LabSynch helps — it&apos;s free for any lab living the same spreadsheet life I did.
             </p>
             <p className="mt-3 max-w-xl text-gray-500">No pricing, no sales call, no lock-in. Get access and use the instance I host, or take the code and run your own.</p>
             <div className="mt-8 flex flex-wrap gap-3">
@@ -285,7 +285,7 @@ export default function Landing() {
         <p className="mx-auto max-w-2xl px-6 text-xs leading-relaxed">
           LabSynch is free and provided <b className="text-gray-400">as-is</b>, with no warranty. It&apos;s a tool one person built and shares to help other labs — expect the occasional rough edge, and please keep your own backups of anything important. Found a bug or have an idea? Email <a href="mailto:info@labsynch.com" className="text-gray-400 hover:text-white">info@labsynch.com</a> — I read every message.
         </p>
-        <p className="mt-4">LabSynch · Free &amp; open source (MIT) · <a href={GITHUB} className="text-gray-400 hover:text-white">GitHub</a> · Built by someone who has run engineering &amp; research labs for over a decade</p>
+        <p className="mt-4">LabSynch · Free &amp; open source (MIT) · <a href={GITHUB} className="text-gray-400 hover:text-white">GitHub</a></p>
       </footer>
     </div>
   );
