@@ -1,0 +1,33 @@
+node_modules/
+.env
+.env.local
+.dev.vars
+.wrangler/
+dist/
+.next/
+.open-next/
+*.log
+
+# Prisma generated client (regenerate with `npm run db:generate`)
+packages/db/generated/
+# Local sqlite dev db
+packages/db/dev.db
+packages/db/*.db
+
+# Database backups (contain customer data — never commit)
+backups/
+
+# Playwright E2E artifacts
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/
+
+# Internal / maintainer-only — kept locally, NOT published to the public repo
+CLAUDE.md
+web/CLAUDE.md
+OPEN-SOURCE.md
+docs/REQUIREMENTS.md
+pilot-docs/
+landing/
+setup-labhive.sh

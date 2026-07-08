@@ -1,0 +1,13 @@
+-- AlterTable
+ALTER TABLE "InventoryItem" ADD COLUMN "extraDocuments" TEXT;
+
+-- AlterTable
+ALTER TABLE "Lab" ADD COLUMN "benches" INTEGER;
+ALTER TABLE "Lab" ADD COLUMN "chairs" INTEGER;
+ALTER TABLE "Lab" ADD COLUMN "facilityNotes" TEXT;
+ALTER TABLE "Lab" ADD COLUMN "floorPlanUrl" TEXT;
+ALTER TABLE "Lab" ADD COLUMN "fumeHoods" INTEGER;
+ALTER TABLE "Lab" ADD COLUMN "hvacDetails" TEXT;
+ALTER TABLE "Lab" ADD COLUMN "roomNo" TEXT;
+ALTER TABLE "Lab" ADD COLUMN "sinks" INTEGER;
+ALTER TABLE "Lab" ADD COLUMN "tables" INTEGER;

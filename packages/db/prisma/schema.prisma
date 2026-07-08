@@ -1,0 +1,771 @@
+// Lab Hive — Prisma schema
+// Target: Cloudflare D1 (SQLite). Note the SQLite constraints vs the original Postgres design:
+//   - No native enums  -> enum fields are String with the allowed values listed in a comment.
+//   - No scalar arrays -> list fields (tags, overrideDates) are stored as JSON-encoded String.
+// Validate enum/list values in the API layer (api/src/middleware/validate.ts).
+
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+  runtime  = "workerd"
+}
+
+datasource db {
+  provider = "sqlite"
+  // Connection URL lives in prisma.config.ts (Prisma 7). The Worker uses the D1 adapter.
+}
+
+// ── TENANTS / PLANS (multi-tenant SaaS) ───────
+// plan: DEMO | DEPARTMENT | ENTERPRISE. Limits null = unlimited.
+model Tenant {
+  id           String   @id @default(cuid())
+  name         String
+  plan         String   @default("DEMO")
+  department   String?
+  maxLabs      Int?     // null = unlimited
+  maxInventory Int?
+  maxUsers     Int?
+  status       String   @default("trial") // trial | active | suspended | expired
+  trialEndsAt  DateTime? // when the trial/subscription ends
+  ownerEmail   String?   // the org's owner-admin email
+  notes        String?   // internal notes about this customer
+  attachments  String?   // JSON array of {label,url} — contracts, invoices, etc.
+  payments     String?   // JSON array of {amount,currency,date,note} — manual payment log
+  fiscalYearStartMonth Int @default(1) // 1=Jan (calendar). Finance groups dates by this fiscal year.
+  aiApiKey     String?   // optional Anthropic API key — enables the smart (Claude) assistant for this workspace
+  defaultApproverEmail String? // pre-selected approver for new purchase requests
+  defaultApproverName  String?
+  ppeOptions   String?   // JSON array of PPE item names students can request (admin-managed)
+  allowedEmailDomains String? // comma-separated allowed email domains for new users (e.g. "example.edu,lab.org"); empty = any
+  createdAt    DateTime @default(now())
+}
+
+// ── ORG HIERARCHY: Campus → School → Department → Lab ──
+model Campus {
+  id        String   @id @default(cuid())
+  tenantId  String?
+  name      String
+  location  String?
+  createdAt DateTime @default(now())
+}
+
+model School {
+  id        String   @id @default(cuid())
+  tenantId  String?
+  campusId  String?
+  name      String
+  createdAt DateTime @default(now())
+}
+
+model Department {
+  id        String   @id @default(cuid())
+  tenantId  String?
+  schoolId  String?
+  name      String
+  code      String?
+  createdAt DateTime @default(now())
+}
+
+// ── USERS & ROLES ─────────────────────────────
+// role: STUDENT | FACULTY | LAB_TECHNICIAN | LAB_COORDINATOR | LAB_MANAGER | HEAD_OF_SCHOOL | DEAN | ADMIN
+
+model User {
+  id            String   @id @default(cuid())
+  tenantId      String?
+  email         String   @unique
+  name          String
+  role          String   @default("STUDENT") // see Role values above
+  campus        String?
+  school        String?
+  department    String?
+  studentId     String?
+  passwordHash  String?  // for credentials auth
+  isApprover      Boolean  @default(false) // can be picked as a procurement approver
+  superAdmin      Boolean  @default(false) // platform owner — manages all organisations
+  mustResetPassword Boolean @default(false) // force a password change on next sign-in
+  acceptedPolicyAt      DateTime? // when the user agreed to the privacy policy (proof of consent)
+  acceptedPolicyVersion String?   // which policy version they agreed to
+  resetOtp        String?   // 6-digit password-reset code
+  resetOtpExpires DateTime? // when the code expires
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  serviceRequests  ServiceRequest[]
+  approvals        Approval[]
+  scheduledBy      LabSession[]       @relation("ScheduledBy")
+  maintenanceLogs  MaintenanceLog[]
+}
+
+// ── INVENTORY ─────────────────────────────────
+// type: EQUIPMENT | CONSUMABLE | PPE | TOOL
+
+model InventoryItem {
+  id            String        @id @default(cuid())
+  tenantId      String?
+  name          String
+  type          String        // see InventoryType values above
+  category      String
+  quantity      Int           @default(0)
+  minQuantity   Int           @default(0)  // low stock threshold
+  unit          String?       // pcs, ml, kg, etc.
+  lifeYears     Int?          // useful life of the item, in years
+
+  // Location: labId is the laboratory; subLocation is cupboard/tray no.
+  labId         String?
+  lab           Lab?          @relation(fields: [labId], references: [id])
+  location      String?       // legacy/free-text location
+  subLocation   String?       // cupboard no., tray no., etc.
+
+  // Asset identity
+  ownership     String?       // owning dept/PI/grant
+  stream        String?       // School | Teaching | Research | Outreach | Club | Stationery | Service | Other
+  serialNumber  String?
+  barcode       String?       // barcode value (text)
+  pictureUrl    String?       // R2 image of the item
+  barcodeUrl    String?       // R2 image of the barcode label
+
+  // MEP / electrical
+  electricalReq String?       // electrical requirement
+  additionalMep String?       // additional MEP requirement
+
+  // PAT (Portable Appliance Testing)
+  patRequired   Boolean       @default(false)
+  patExpiration DateTime?
+
+  // Maintenance
+  maintenanceRequired  Boolean  @default(false)
+  maintenanceType      String?  // INHOUSE | OUTSOURCE
+  maintenanceFrequency String?  // MONTHLY | QUARTERLY | BIANNUAL | ANNUAL | BIENNIAL
+  lastMaintenanceDate  DateTime? // previous maintenance (blank for new equipment)
+  nextMaintenanceDue   DateTime? // flagged when within 1 month / overdue
+  maintenanceCertificateUrl String?
+
+  // Calibration
+  calibrationRequired Boolean   @default(false)
+  calibrationType     String?   // INHOUSE | OUTSOURCE
+  calibrationFrequency String?  // MONTHLY | QUARTERLY | BIANNUAL | ANNUAL | BIENNIAL
+  calibrationDate     DateTime? // previous/last calibration
+  calibrationExpiry   DateTime? // next due — flagged when within 1 month / overdue
+  calibrationCertificateUrl String?
+
+  // Service provider (vendor) — for maintenance/calibration outsourcing
+  serviceProviderId   String?
+  serviceProvider     Vendor?   @relation("ServiceProvider", fields: [serviceProviderId], references: [id])
+
+  // Main supplier (vendor who provided the item) + procurement details
+  supplierId    String?
+  supplier      Vendor?   @relation("Supplier", fields: [supplierId], references: [id])
+  purchaseDate  DateTime?
+  priceCurrency String?   // default AED
+  pricePerPiece Float?
+  pricePerDozen Float?  // deprecated (kept for old data); UI no longer collects it
+  pricePerBox   Float?
+  unitsPerBox   Int?    // how many pieces per box/pack (optional)
+
+  // Document attachments (R2 URLs)
+  coshhUrl                   String?   // Safety Standard / COSHH
+  riskAssessmentUrl          String?
+  experimentManualUrl        String?
+  safetyOperatingProcedureUrl String?
+  standardOperatingProcedureUrl String?
+  maintenanceLogUrl          String?
+  equipmentManualUrl         String?
+
+  comments      String?
+  notes         String?
+  extraDocuments String?      // JSON array of {label, url} — additional docs (data sheets etc.)
+  financeMode   String?       // null | CAPEX | OPEX — when set, the item flows into the Finance managers
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  maintenanceLogs MaintenanceLog[]
+  experimentItems ExperimentItem[]
+  activityItems   ActivityItem[]
+  issuanceItems   IssuanceItem[]
+  procurementItems ProcurementItem[]
+  movements       StockMovement[]
+}
+
+// Append-only stock ledger — every quantity change writes one row, so stock = sum(delta) and
+// you can always see why it moved (received / consumed / issued / returned / experiment / adjustment).
+model StockMovement {
+  id          String   @id @default(cuid())
+  tenantId    String?
+  itemId      String
+  item        InventoryItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  delta       Float    // +in / -out (actually applied, never takes stock below 0)
+  reason      String   // received | consumed | issued | returned | experiment | experiment-refund | adjustment
+  refType     String?  // procurement | issuance | experiment | manual
+  refId       String?
+  unitCost    Float?   // avg unit cost at the time of the move
+  note        String?
+  date        DateTime @default(now())
+  createdById String?
+  createdAt   DateTime @default(now())
+}
+
+// ── LABS & SCHEDULING ─────────────────────────
+
+model Lab {
+  id           String   @id @default(cuid())
+  tenantId     String?
+  departmentId String?
+  name        String
+  building    String
+  floor       String?
+  roomNo      String?
+  capacity    Int
+  description String?
+  isActive    Boolean  @default(true)
+
+  // Facilities details
+  chairs       Int?
+  tables       Int?
+  benches      Int?
+  sinks        Int?
+  fumeHoods    Int?
+  hvacDetails  String?
+  floorPlanUrl String?
+  facilityNotes String?
+  pictureUrl   String?   // tile photo
+  color        String?   // tile colour code (hex or name)
+  labDocuments String?   // JSON array of {label,url} — floor plan, lab drawing, MEP drawing, etc.
+
+  sessions    LabSession[]
+  inventory   InventoryItem[]
+  experiments Experiment[]
+  timetable   TimetableEntry[]
+  activities  Activity[]
+}
+
+// ── ACTIVITIES (projects / research / coursework / clubs) ──
+model Activity {
+  id              String         @id @default(cuid())
+  tenantId        String?
+  kind            String         @default("PROJECT") // RESEARCH | PROJECT | COURSEWORK | MINI_PROJECT | CLUB | OTHER
+  title           String
+  supervisor      String?
+  supervisorEmail String?
+  researcher      String?        // legacy: researcher or group name (kept for old data)
+  userName        String?        // name of the user (researcher/student/etc.)
+  userType        String?        // FACULTY | STUDENT | RESEARCHER | PHD | MASTERS | OTHER
+  userEmail       String?
+  school          String?        // from org hierarchy
+  department      String?        // from org hierarchy
+  courseCode      String?
+  labId           String?
+  lab             Lab?           @relation(fields: [labId], references: [id])
+  facilities      String?        // additional requirement
+  groupInfo       String?        // optional group info (synced with linked issuances)
+  startDate       DateTime?
+  endDate         DateTime?
+  status          String?        @default("ACTIVE") // ACTIVE | COMPLETED
+  notes           String?
+  createdAt       DateTime       @default(now())
+  items           ActivityItem[]
+  issuances       Issuance[]
+}
+
+model ActivityItem {
+  id         String         @id @default(cuid())
+  activityId String
+  activity   Activity       @relation(fields: [activityId], references: [id], onDelete: Cascade)
+  itemId     String?
+  item       InventoryItem? @relation(fields: [itemId], references: [id])
+  customName String?        // when not in inventory
+  quantity   Float          @default(1)
+  unit       String?        @default("PIECE") // PIECE | BOX
+  consumed   Boolean        @default(false)
+  price      Float?         // unit price for custom items (inventory items use their own price)
+}
+
+// ── ISSUANCES (equipment / item borrowal forms) ──
+model Issuance {
+  id              String         @id @default(cuid())
+  tenantId        String?
+  activityId      String?
+  activity        Activity?      @relation(fields: [activityId], references: [id])
+  studentName     String?
+  groupName       String?
+  facultyName     String?
+  courseCode      String?
+  studentEmail    String?
+  facultyEmail    String?
+  supervisorName  String?
+  supervisorEmail String?
+  school          String?        // from org hierarchy
+  department      String?        // from org hierarchy
+  groupInfo       String?        // optional group info (synced with linked activity)
+  borrowDate      String?
+  returnDate      String?
+  status          String?        @default("ISSUED") // ISSUED | RETURNED
+  notes           String?
+  stockDeducted   Boolean        @default(false)
+  stockReturned   Boolean        @default(false) // borrowed (non-consumed) items put back to stock
+  deductedSnapshot String?       // JSON [{itemId,qty,consumed}] — exactly what left stock on deduct
+  createdAt       DateTime       @default(now())
+  items           IssuanceItem[]
+}
+
+model IssuanceItem {
+  id         String         @id @default(cuid())
+  issuanceId String
+  issuance   Issuance       @relation(fields: [issuanceId], references: [id], onDelete: Cascade)
+  itemId     String?
+  item       InventoryItem? @relation(fields: [itemId], references: [id])
+  customName String?
+  quantity   Float          @default(1)
+  unit       String?        @default("PIECE")
+  consumed   Boolean        @default(false)
+  price      Float?
+}
+
+// ── FACULTY REGISTER ──────────────────────────
+// Named teaching staff, so course-leader / faculty pickers offer a managed list.
+model Faculty {
+  id         String   @id @default(cuid())
+  tenantId   String?
+  name       String
+  email      String?
+  department String?
+  createdAt  DateTime @default(now())
+}
+
+// ── SUBJECTS / COURSES ────────────────────────
+model Subject {
+  id          String   @id @default(cuid())
+  tenantId    String?
+  name        String
+  code        String?
+  facultyName String?
+  color       String?
+  createdAt   DateTime @default(now())
+  experiments Experiment[]
+}
+
+// ── EXPERIMENTS ───────────────────────────────
+model Experiment {
+  id          String   @id @default(cuid())
+  tenantId    String?
+  subjectId   String?
+  subject     Subject? @relation(fields: [subjectId], references: [id])
+  labId       String?
+  lab         Lab?     @relation(fields: [labId], references: [id])
+  title       String
+  courseCode  String?
+  facultyName String?
+  groups      Int?     // legacy; groups now set per timetable booking
+  notes       String?
+  experimentManualUrl          String?
+  equipmentManualUrl           String?
+  riskAssessmentUrl            String?
+  safetyOperatingProcedureUrl  String?
+  standardOperatingProcedureUrl String?
+  documents   String?  // JSON array of {label,url} — pulled from items + any added manually
+  stockDeducted Boolean @default(false) // used consumables have been applied to inventory at least once
+  deductedSnapshot String? // JSON { itemId: qty } already applied — lets re-sync apply only the difference
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  items       ExperimentItem[]
+  timetable   TimetableEntry[]
+}
+
+// ── SEMESTER TIMETABLE ────────────────────────
+// A booked session in the semester (week 1-12). May reference an experiment, or be a
+// custom session (meeting/exam/free/office/other). Drives the weekly calendar.
+model TimetableEntry {
+  id           String      @id @default(cuid())
+  tenantId     String?
+  termId       String?
+  term         Term?       @relation(fields: [termId], references: [id], onDelete: Cascade)
+  labId        String?
+  lab          Lab?        @relation(fields: [labId], references: [id])
+  experimentId String?
+  experiment   Experiment? @relation(fields: [experimentId], references: [id])
+  kind         String      @default("EXPERIMENT") // EXPERIMENT | preset session code | OTHER
+  title        String?     // for non-experiment / custom sessions
+  facultyName  String?
+  groups       Int?
+  week         Int
+  dayOfWeek    Int
+  startTime    String
+  endTime      String
+  notes        String?
+  createdAt    DateTime    @default(now())
+}
+
+// A named semester/term you build a timetable for, then duplicate to next year/summer.
+model Term {
+  id        String           @id @default(cuid())
+  tenantId  String?
+  name      String           // e.g. "Fall 2026"
+  startDate String?          // ISO date Week 1 starts (yyyy-mm-dd)
+  weeks     Int              @default(12)
+  workDays  String?          // JSON array of working weekday indices (0=Mon..6=Sun), e.g. "[0,1,2,3,4]"
+  dayStart  String?          // calendar day start time, e.g. "08:00"
+  dayEnd    String?          // calendar day end time, e.g. "18:00"
+  createdAt DateTime         @default(now())
+  entries   TimetableEntry[]
+}
+
+model ExperimentItem {
+  id           String        @id @default(cuid())
+  experimentId String
+  experiment   Experiment    @relation(fields: [experimentId], references: [id], onDelete: Cascade)
+  itemId       String
+  item         InventoryItem @relation(fields: [itemId], references: [id])
+  quantity     Float         @default(1)
+  unit         String?       @default("PIECE") // PIECE | BOX — which price rate to use
+  consumed     Boolean       @default(false) // consumed (not recovered) → counts toward cost
+}
+
+model LabSession {
+  id            String   @id @default(cuid())
+  tenantId      String?
+  labId         String
+  lab           Lab      @relation(fields: [labId], references: [id])
+  moduleCode    String?
+  title         String
+  facultyName   String?
+  group         String?
+  dayOfWeek     Int      // 0=Mon, 4=Fri
+  startTime     String   // "08:00"
+  endTime       String   // "10:00"
+  isRecurring   Boolean  @default(true)
+  semesterStart DateTime?
+  semesterEnd   DateTime?
+  overrideDates String?  // JSON array of ISO dates (excluded/holiday dates)
+  scheduledById String?
+  scheduledBy   User?    @relation("ScheduledBy", fields: [scheduledById], references: [id])
+  createdAt     DateTime @default(now())
+}
+
+// ── SERVICE REQUESTS (3D print, laser cut etc) ─
+// type:   THREE_D_PRINT | LASER_CUT | CNC | SUPERVISED_SESSION | EQUIPMENT_USE | OTHER
+// status: PENDING | APPROVED | IN_PROGRESS | COMPLETED | REJECTED
+
+model ServiceRequest {
+  id          String   @id @default(cuid())
+  tenantId    String?
+  type        String   // see RequestType values above
+  status      String   @default("PENDING") // see RequestStatus values above
+  userId      String
+  user        User     @relation(fields: [userId], references: [id])
+  title       String
+  description String
+  fileUrl     String?  // STL, DXF, SVG uploaded to R2 — legacy single file
+  attachments String?  // JSON array of {label,url} — multiple drawings/specs
+  material    String?
+  quantity    Int?
+  notes       String?
+  preferredDate DateTime? // preferred completion date
+  urgentReason  String?   // if urgent, why
+  studentId   String?
+  course      String?     // course name/code (students)
+  supervisor  String?     // course supervisor name/email (students)
+  school      String?
+  department  String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  approvals   Approval[]
+}
+
+// ── APPROVALS (generic, reusable) ─────────────
+// status: PENDING | APPROVED | REJECTED
+
+model Approval {
+  id          String         @id @default(cuid())
+  tenantId    String?
+  requestId   String
+  request     ServiceRequest @relation(fields: [requestId], references: [id])
+  approverId  String
+  approver    User           @relation(fields: [approverId], references: [id])
+  status      String         @default("PENDING") // see ApprovalStatus values above
+  comments    String?
+  decidedAt   DateTime?
+  createdAt   DateTime       @default(now())
+}
+
+// ── SAFETY ────────────────────────────────────
+
+// Two-way communication thread on any request. Re-uploaded files become history here.
+model RequestComment {
+  id         String   @id @default(cuid())
+  tenantId   String?
+  refType    String   // JOB | RA | PORTAL
+  refId      String
+  authorId   String?
+  authorName String?
+  authorRole String?
+  body       String?
+  fileUrl    String?  // legacy single file
+  attachments String? // JSON array of {label,url} — multiple clickable files
+  createdAt  DateTime @default(now())
+}
+
+// Per-user "delete" of a request (hide for me only). The other side still sees it.
+model RequestHide {
+  id        String   @id @default(cuid())
+  tenantId  String?
+  userId    String
+  refType   String   // JOB | PORTAL | RA
+  refId     String
+  createdAt DateTime @default(now())
+
+  @@unique([userId, refType, refId])
+}
+
+// Flexible user-submitted requests (resource/borrowing, lab access, etc.). `data`/`items` are JSON strings.
+model PortalRequest {
+  id             String   @id @default(cuid())
+  tenantId       String?
+  userId         String
+  submitterName  String?
+  submitterEmail String?
+  kind           String   // RESOURCE | ACCESS | …
+  status         String   @default("pending") // pending | approved | rejected | hold | issued
+  data           String?  // JSON: header fields (school, purpose, course, labId…)
+  items          String?  // JSON: line items [{ name, qty, notes, link }]
+  createdAt      DateTime @default(now())
+}
+
+model SafetyDocument {
+  id          String   @id @default(cuid())
+  tenantId    String?
+  title       String
+  type        String   // risk_assessment, sop, ppe_guide
+  fileUrl     String   // stored in R2
+  version     String   @default("1.0")
+  equipment   String?
+  approvedBy  String?
+  approvedAt  DateTime?
+  status      String?  @default("approved") // approved (lab uploads) | submitted | revise | hold | rejected (user RA submissions)
+  submittedById   String?
+  submittedByName String?
+  supervisor  String?
+  project     String?
+  school      String?
+  department  String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model PPERequest {
+  id          String   @id @default(cuid())
+  tenantId    String?
+  userId      String
+  type        String?  @default("PPE") // PPE | RESOURCE
+  item        String
+  quantity    Int
+  reason      String?
+  status      String   @default("pending")
+  createdAt   DateTime @default(now())
+}
+
+// ── PROCUREMENT / CAPEX / OPEX ────────────────
+// budgetType: CAPEX | OPEX
+
+model ProcurementRequest {
+  id            String   @id @default(cuid())
+  tenantId      String?
+  budgetType    String   @default("OPEX") // legacy capital/operational tag (kept for old data)
+  budgetYear    Int?     // the budget year this order is charged against
+  title         String
+  description   String
+  supplier      String?
+  quotedAmount  Float?
+  currency      String   @default("AED")
+  invoiceUrl    String?  // supplier invoice PDF (R2)
+  quotationUrl  String?  // PDF uploaded to R2
+  deliveryNoteUrl String? // delivery note PDF (R2)
+  documents     String?  // JSON array of {label,url} — attached quotes & supporting docs
+  deliverables  String?  // JSON aligned to items: [{received, unitCost, pushedTo}]
+  status        String   @default("draft") // draft, submitted, approved, rejected, on_hold, ordered, delivered
+  approverEmail String?  // who must approve (Dean / specified faculty)
+  approverName  String?
+  external      Boolean  @default(false) // true = handled outside LabSynch (no in-app approval routing)
+  vatPercent    Float?   // VAT % applied on top of the (excl-VAT) line totals
+  vendorQuotes  String?  // JSON array of {vendorName, amount, note, fileUrl, preferred} — single or multi-vendor comparison
+  decisionNote  String?  // approver's message back to the requester on approve/hold/reject
+  kind          String?  // QUOTE | BUDGET
+  campus        String?
+  department    String?
+  lab           String?
+  erpReference  String?  // ERP PO number once handed off
+  submittedById String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  vendor        Vendor?  @relation(fields: [vendorId], references: [id])
+  vendorId      String?
+  items         ProcurementItem[]
+}
+
+// Quote collection — compare supplier quotes in a grid (vendors × items) before raising a PR.
+model QuoteSheet {
+  id        String   @id @default(cuid())
+  tenantId  String?
+  title     String
+  data      String?  // JSON { vendors: string[], items: [{name, qty, prices: (number|null)[]}], notes }
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model ProcurementItem {
+  id            String              @id @default(cuid())
+  procurementId String
+  procurement   ProcurementRequest  @relation(fields: [procurementId], references: [id], onDelete: Cascade)
+  itemId        String?
+  item          InventoryItem?      @relation(fields: [itemId], references: [id])
+  customName    String?             // when not in inventory
+  category      String?             // item type: Equipment | Consumable | Software | …
+  quantity      Float               @default(1)
+  unit          String?             @default("PIECE")
+  estPrice      Float?              // estimated / quoted unit price
+  link          String?             // product / quote link
+  imageUrl      String?             // product picture (R2)
+  notes         String?
+}
+
+// ── VENDORS ───────────────────────────────────
+
+model Vendor {
+  id          String   @id @default(cuid())
+  tenantId    String?
+  name        String
+  contactName String?
+  email       String?
+  phone       String?
+  category    String?  // lab supplies, equipment, maintenance
+  country     String?
+  notes       String?
+  documents   String?  // JSON array of {label,url} — VAT cert, trade licence, etc.
+  isApproved  Boolean  @default(false)
+  createdAt   DateTime @default(now())
+
+  procurement ProcurementRequest[]
+  servicedItems InventoryItem[] @relation("ServiceProvider")
+  suppliedItems InventoryItem[] @relation("Supplier")
+}
+
+// ── FINANCE: CAPEX assets, OPEX expenses, annual budget lines ──
+// Depreciation / book value / remaining life are computed on the fly, never stored.
+model CapexAsset {
+  id              String    @id @default(cuid())
+  tenantId        String?
+  name            String
+  category        String?
+  cost            Float
+  purchaseDate    DateTime
+  usefulLifeYears Int
+  disposed        Boolean   @default(false)
+  disposedDate    DateTime?
+  notes           String?
+  createdAt       DateTime  @default(now())
+}
+
+model OpexExpense {
+  id            String   @id @default(cuid())
+  tenantId      String?
+  amount        Float
+  category      String   // consumables | maintenance | utilities | transport | shipping | services | …
+  description   String?
+  date          DateTime
+  attachmentUrl String?  // receipt / invoice (R2) — legacy single file
+  attachments   String?  // JSON array of {label,url} — multiple receipts/invoices
+  source        String?  // null/manual | use | experiment (maintenance is derived)
+  createdById   String?  // audit trail
+  createdByName String?
+  createdAt     DateTime @default(now())
+}
+
+model BudgetLine {
+  id          String   @id @default(cuid())
+  tenantId    String?
+  year        Int
+  category    String
+  description String?
+  type        String   // OPEX | CAPEX
+  allocated   Float
+  attachments String?  // JSON array of {label,url}
+  createdAt   DateTime @default(now())
+}
+
+// ── WEB PUSH (phone notifications) ──
+model PushSubscription {
+  id        String   @id @default(cuid())
+  tenantId  String?
+  userId    String
+  endpoint  String   @unique
+  p256dh    String
+  auth      String
+  createdAt DateTime @default(now())
+}
+
+// ── CONTACT / ACCESS REQUESTS (public landing form) ──
+model ContactMessage {
+  id           String   @id @default(cuid())
+  name         String
+  email        String
+  organisation String?
+  plan         String?  // Free | Enterprise
+  message      String
+  handled      Boolean  @default(false)
+  createdAt    DateTime @default(now())
+}
+
+// ── MAINTENANCE ───────────────────────────────
+// type: SCHEDULED | CORRECTIVE | INSPECTION
+
+model MaintenanceLog {
+  id           String        @id @default(cuid())
+  tenantId     String?
+  itemId       String
+  item         InventoryItem @relation(fields: [itemId], references: [id])
+  type         String        // PREVENTIVE | SERVICE | REPAIR | CALIBRATION | AMC | …
+  status       String?       // NOT_STARTED | IN_PROGRESS | DONE
+  mode         String?       // INHOUSE | OUTSOURCE
+  description  String
+  performedBy  String?
+  technician   User?         @relation(fields: [technicianId], references: [id])
+  technicianId String?
+  cost         Float?
+  includeInOpex Boolean      @default(true) // completed cost flows into the Finance OPEX manager
+  dueDate      DateTime?
+  nextDueDate  DateTime?
+  fileUrl      String?
+  documents    String?       // JSON array of {label,url} — reports, quotes, certificates
+  notes        String?       // free notes — e.g. repair done / changes made
+  createdAt    DateTime      @default(now())
+}
+
+model MaintenanceSchedule {
+  id            String    @id @default(cuid())
+  tenantId      String?
+  itemId        String
+  title         String
+  frequencyDays Int       // every N days
+  lastDone      DateTime?
+  nextDue       DateTime
+  assignedTo    String?
+  notes         String?
+  createdAt     DateTime  @default(now())
+}
+
+// ── DOCUMENTS ─────────────────────────────────
+
+model Document {
+  id          String   @id @default(cuid())
+  tenantId    String?
+  title       String
+  category    String   // sop, manual, form, policy
+  tags        String   @default("[]") // JSON array of equipment names, lab names, topics
+  fileUrl     String
+  version     String   @default("1.0")
+  isPublic    Boolean  @default(true)
+  uploadedBy  String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}

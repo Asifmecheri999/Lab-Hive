@@ -1,0 +1,51 @@
+name: Deploy Lab Hive — Staging
+
+# Manual trigger only: open the Actions tab → "Deploy Lab Hive — Staging" → Run workflow.
+# Builds on Ubuntu (same as prod) and deploys the STAGING API + web, wired to the staging
+# D1 (labhive-staging) and staging API URL — never touches production.
+on:
+  workflow_dispatch: {}
+
+concurrency:
+  group: deploy-staging
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CI: "true"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install workspace deps
+        run: npm install
+      - name: Generate Prisma client
+        run: npm run db:generate
+
+      # Guard: AUTH_SECRET must be a wrangler secret, never a committed plaintext var.
+      - name: Assert AUTH_SECRET is not a plaintext var
+        run: |
+          if grep -Eq '^[[:space:]]*AUTH_SECRET[[:space:]]*=' api/wrangler.toml; then
+            echo "::error::AUTH_SECRET must be a wrangler secret, not a plaintext [vars] entry in api/wrangler.toml"; exit 1
+          fi
+
+      # Apply pending D1 migrations to the STAGING database, then deploy the staging API Worker.
+      - name: Apply D1 migrations (staging)
+        run: cd api && npx wrangler d1 migrations apply labhive-staging --remote --env staging
+      - name: Deploy API Worker (staging)
+        run: cd api && npx wrangler deploy --env staging
+
+      # Build + deploy the staging frontend, inlining the STAGING API URL at build time.
+      - name: Install web deps
+        run: cd web && npm install
+      - name: Build & deploy frontend (staging)
+        run: cd web && npx opennextjs-cloudflare build && npx opennextjs-cloudflare deploy --env staging
+        env:
+          NEXT_PUBLIC_API_URL: https://labhive-api-staging.asifmecheri999.workers.dev

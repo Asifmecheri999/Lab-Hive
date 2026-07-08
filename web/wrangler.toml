@@ -1,0 +1,73 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Lab Hive web frontend (Next.js via OpenNext) — a Cloudflare WORKER (not Pages).
+# Build:  npx opennextjs-cloudflare build     (NEXT_PUBLIC_* are inlined AT BUILD TIME)
+# Deploy: npx opennextjs-cloudflare deploy [--env staging|--env production]
+#
+# IMPORTANT: NEXT_PUBLIC_API_URL is compiled INTO the bundle at build time, so the API
+# URL a browser calls is decided by the env var present during `build`, NOT by the
+# runtime [vars] below. Always build with the matching NEXT_PUBLIC_API_URL for the env
+# you're about to deploy (see DEPLOYMENT.md). API_URL (server-side, read at runtime) is
+# taken from the [vars] here.
+# ─────────────────────────────────────────────────────────────────────────────
+name = "labhive-web"
+main = ".open-next/worker.js"
+compatibility_date = "2025-01-01"
+compatibility_flags = ["nodejs_compat"]
+# Production is served only via the custom domain (labsynch.com); hide the workers.dev URL.
+workers_dev = false
+
+[assets]
+directory = ".open-next/assets"
+binding = "ASSETS"
+
+# Direct Worker-to-Worker call to the API (avoids a public loopback).
+[[services]]
+binding = "API"
+service = "labhive-api"
+
+[vars]
+NEXT_PUBLIC_API_URL = "https://labhive-api.asifmecheri999.workers.dev"
+API_URL = "https://labhive-api.asifmecheri999.workers.dev"
+
+# ═════════════════════════════════════════════════════════════════════════════
+# STAGING  →  build with NEXT_PUBLIC_API_URL=<staging API>, then:
+#             npx opennextjs-cloudflare deploy --env staging
+# Served at https://labhive-web-staging.<your-subdomain>.workers.dev and wired to the
+# STAGING API worker, so a staging build can NEVER hit production.
+# ═════════════════════════════════════════════════════════════════════════════
+[env.staging]
+name = "labhive-web-staging"
+workers_dev = true   # expose the staging preview URL
+
+[env.staging.assets]
+directory = ".open-next/assets"
+binding = "ASSETS"
+
+[[env.staging.services]]
+binding = "API"
+service = "labhive-api-staging"
+
+[env.staging.vars]
+NEXT_PUBLIC_API_URL = "https://labhive-api-staging.asifmecheri999.workers.dev"
+API_URL = "https://labhive-api-staging.asifmecheri999.workers.dev"
+
+# ═════════════════════════════════════════════════════════════════════════════
+# PRODUCTION (explicit)  →  build with NEXT_PUBLIC_API_URL=<prod API>, then:
+#             npx opennextjs-cloudflare deploy --env production
+# Same worker + custom domain as the top-level default.
+# ═════════════════════════════════════════════════════════════════════════════
+[env.production]
+name = "labhive-web"
+workers_dev = false
+
+[env.production.assets]
+directory = ".open-next/assets"
+binding = "ASSETS"
+
+[[env.production.services]]
+binding = "API"
+service = "labhive-api"
+
+[env.production.vars]
+NEXT_PUBLIC_API_URL = "https://labhive-api.asifmecheri999.workers.dev"
+API_URL = "https://labhive-api.asifmecheri999.workers.dev"

@@ -1,0 +1,102 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Lab Hive API — Cloudflare Worker. Database is Cloudflare D1 (per-request Prisma
+# client via @prisma/adapter-d1). NOT Hyperdrive/Postgres.
+#
+# THREE ways this file is used:
+#   • `wrangler dev`                    → top-level config, D1 runs LOCALLY (miniflare)
+#   • `wrangler deploy`                 → top-level config = PRODUCTION (current CI does this)
+#   • `wrangler deploy --env staging`   → [env.staging]   (separate worker + separate D1)
+#   • `wrangler deploy --env production`→ [env.production] (same worker + D1 as top-level)
+#
+# NOTE: named environments do NOT inherit top-level bindings/vars — each env re-declares
+# its own D1, R2 and vars. That duplication is a wrangler requirement, not a mistake.
+# ─────────────────────────────────────────────────────────────────────────────
+name = "labhive-api"
+main = "src/index.ts"
+compatibility_date = "2025-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Daily job (06:00 UTC) — trial reminders + auto-expire.
+[triggers]
+crons = ["0 6 * * *"]
+
+[vars]
+ENVIRONMENT = "development"
+# AUTH_SECRET is intentionally NOT a plaintext var here — it is a real wrangler secret in
+# production (npx wrangler secret put AUTH_SECRET) and lives in a gitignored api/.dev.vars for
+# local dev, so a committed plaintext value can never override or leak the JWT signing key.
+# Web Push (VAPID). PUBLIC key is not secret. PRIVATE key is a secret:
+#   npx wrangler secret put VAPID_PRIVATE_KEY
+VAPID_PUBLIC_KEY = "BOhscNxSFF05RlI_yK3bjXzznUeQikHV9h20yd3upTB8WBhIMcHZbxt8OtIHf-QqFhyCZAnXpEj7tfbQ7HiJoKE"
+MAIL_FROM = "noreply@labsynch.com"
+MAIL_TO = "info@labsynch.com"
+
+[[r2_buckets]]
+binding = "FILES"
+bucket_name = "labhive-files"
+
+# Cloudflare D1 (production database).
+[[d1_databases]]
+binding = "DB"
+database_name = "labhive"
+database_id = "b9834772-8951-4cef-887e-6b0166ab6659"
+migrations_dir = "migrations"
+
+# ═════════════════════════════════════════════════════════════════════════════
+# STAGING  →  deploy with:  wrangler deploy --env staging
+# Separate worker (labhive-api-staging) + SEPARATE D1 (labhive-staging) so staging
+# can never touch production data. Reachable at:
+#   https://labhive-api-staging.<your-subdomain>.workers.dev
+# BEFORE first use you MUST: create the D1 (see DEPLOYMENT.md) and paste its id below.
+# ═════════════════════════════════════════════════════════════════════════════
+[env.staging]
+name = "labhive-api-staging"
+
+[env.staging.triggers]
+crons = ["0 6 * * *"]
+
+[env.staging.vars]
+ENVIRONMENT = "staging"
+VAPID_PUBLIC_KEY = "BOhscNxSFF05RlI_yK3bjXzznUeQikHV9h20yd3upTB8WBhIMcHZbxt8OtIHf-QqFhyCZAnXpEj7tfbQ7HiJoKE"
+MAIL_FROM = "noreply@labsynch.com"
+MAIL_TO = "info@labsynch.com"
+# AUTH_SECRET is intentionally NOT here — set it as a secret so staging tokens never
+# validate on production:  npx wrangler secret put AUTH_SECRET --env staging
+
+[[env.staging.r2_buckets]]
+binding = "FILES"
+bucket_name = "labhive-files-staging"
+
+[[env.staging.d1_databases]]
+binding = "DB"
+database_name = "labhive-staging"
+database_id = "fe8e74c8-e94d-4128-a667-46f3382478a2"   # labhive-staging (separate from prod)
+migrations_dir = "migrations"
+
+# ═════════════════════════════════════════════════════════════════════════════
+# PRODUCTION (explicit)  →  deploy with:  wrangler deploy --env production
+# Same worker + D1 as the top-level default (so both `wrangler deploy` and
+# `--env production` target the live labhive-api). AUTH_SECRET stays a real secret
+# on the labhive-api worker (already set) — deliberately not repeated as a plaintext var.
+# ═════════════════════════════════════════════════════════════════════════════
+[env.production]
+name = "labhive-api"
+
+[env.production.triggers]
+crons = ["0 6 * * *"]
+
+[env.production.vars]
+ENVIRONMENT = "production"
+VAPID_PUBLIC_KEY = "BOhscNxSFF05RlI_yK3bjXzznUeQikHV9h20yd3upTB8WBhIMcHZbxt8OtIHf-QqFhyCZAnXpEj7tfbQ7HiJoKE"
+MAIL_FROM = "noreply@labsynch.com"
+MAIL_TO = "info@labsynch.com"
+
+[[env.production.r2_buckets]]
+binding = "FILES"
+bucket_name = "labhive-files"
+
+[[env.production.d1_databases]]
+binding = "DB"
+database_name = "labhive"
+database_id = "b9834772-8951-4cef-887e-6b0166ab6659"
+migrations_dir = "migrations"

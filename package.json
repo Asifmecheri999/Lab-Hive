@@ -1,0 +1,35 @@
+{
+  "name": "labhive",
+  "private": true,
+  "workspaces": [
+    "api",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:web": "cd web && npm run dev",
+    "dev:api": "cd api && npx wrangler dev",
+    "dev": "concurrently \"npm run dev:web\" \"npm run dev:api\"",
+    "test": "npm --prefix api test",
+    "test:e2e": "npm --prefix api run test:seed && playwright test",
+    "test:all": "npm test && npm run test:e2e",
+    "db:generate": "cd packages/db && npx prisma generate",
+    "db:migrate:new": "cd packages/db && npx prisma migrate diff --from-empty --to-schema prisma/schema.prisma --script -o ../../api/migrations/0001_init.sql",
+    "db:apply:local": "cd api && npx wrangler d1 migrations apply labhive --local",
+    "db:apply:remote": "cd api && npx wrangler d1 migrations apply labhive --remote",
+    "db:apply:staging": "cd api && npx wrangler d1 migrations apply labhive-staging --remote --env staging",
+    "db:apply:prod": "cd api && npx wrangler d1 migrations apply labhive --remote --env production",
+    "db:seed:local": "cd api && npx wrangler d1 execute labhive --local --file=./seed.sql",
+    "db:seed:staging": "cd api && npx wrangler d1 execute labhive-staging --remote --env staging --file=./seed.sql",
+    "db:seed:demo:local": "cd api && npx wrangler d1 execute labhive --local --file=./seed-demo.sql",
+    "db:seed:demo:staging": "cd api && npx wrangler d1 execute labhive-staging --remote --env staging --file=./seed-demo.sql",
+    "db:backup": "node scripts/backup-db.mjs",
+    "deploy:api:staging": "cd api && npx wrangler deploy --env staging",
+    "deploy:api:prod": "cd api && npx wrangler deploy --env production",
+    "tail:api:staging": "cd api && npx wrangler tail --env staging",
+    "tail:api:prod": "cd api && npx wrangler tail --env production"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.61.1",
+    "concurrently": "^8.0.0"
+  }
+}

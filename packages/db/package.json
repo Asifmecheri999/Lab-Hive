@@ -1,0 +1,26 @@
+{
+  "name": "@labhive/db",
+  "version": "1.0.0",
+  "description": "Lab Hive Prisma schema + generated client (Cloudflare D1)",
+  "type": "module",
+  "main": "index.ts",
+  "exports": {
+    ".": "./index.ts",
+    "./client": "./generated/prisma/client.ts"
+  },
+  "scripts": {
+    "generate": "prisma generate",
+    "migrate:create": "prisma migrate diff --from-empty --to-schema-datamodel prisma/schema.prisma --script"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@prisma/adapter-d1": "^7.8.0",
+    "@prisma/client": "^7.8.0",
+    "prisma": "^7.8.0"
+  },
+  "devDependencies": {
+    "dotenv": "^17.4.2"
+  }
+}

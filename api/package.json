@@ -1,0 +1,33 @@
+{
+  "name": "api",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "npm run test:seed && start-server-and-test test:server http://127.0.0.1:8788/api/health test:run",
+    "test:run": "vitest run",
+    "test:server": "wrangler dev --port 8788",
+    "test:seed": "wrangler d1 execute labhive --local --file=./test/seed-test.sql"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "dependencies": {
+    "@hono/node-server": "^2.0.5",
+    "@labhive/db": "*",
+    "@prisma/adapter-d1": "^7.8.0",
+    "@prisma/client": "^7.8.0",
+    "hono": "^4.12.26",
+    "jose": "^6.2.3"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.8.71",
+    "@cloudflare/workers-types": "^4.20260620.1",
+    "start-server-and-test": "^3.0.11",
+    "tsx": "^4.22.4",
+    "typescript": "^6.0.3",
+    "vitest": "^3.2.6",
+    "wrangler": "^4.103.0"
+  }
+}

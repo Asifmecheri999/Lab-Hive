@@ -1,0 +1,9 @@
+# Copy this file to `api/.dev.vars` (git-ignored) for local development with `wrangler dev`.
+# These are LOCAL-ONLY values. In production, set real values with:  wrangler secret put <NAME>
+#
+# Required for auth to work locally:
+AUTH_SECRET=dev-only-change-me-to-a-long-random-string
+#
+# Optional (only needed to test these features locally):
+# VAPID_PRIVATE_KEY=your-web-push-private-key
+# ZEPTO_TOKEN=your-zeptomail-token          # outgoing email

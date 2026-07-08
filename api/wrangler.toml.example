@@ -1,0 +1,31 @@
+# Copy to `api/wrangler.toml` and fill in your own Cloudflare resource ids / names.
+# Create the resources first:
+#   wrangler d1 create <your-db>              -> paste the printed database_id below
+#   wrangler r2 bucket create <your-bucket>
+# Secrets are NOT set here — set them once with:
+#   wrangler secret put AUTH_SECRET           (and VAPID_PRIVATE_KEY, ZEPTO_TOKEN if used)
+name = "labsynch-api"
+main = "src/index.ts"
+compatibility_date = "2025-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Daily cron (06:00 UTC) — trial/upkeep jobs.
+[triggers]
+crons = ["0 6 * * *"]
+
+[vars]
+ENVIRONMENT = "development"
+# AUTH_SECRET is a SECRET, not a var — set it with `wrangler secret put AUTH_SECRET`.
+VAPID_PUBLIC_KEY = "<your-vapid-public-key>"   # generate a P-256 pair; keep the private key as a secret
+MAIL_FROM = "noreply@your-domain.example"
+MAIL_TO = "info@your-domain.example"
+
+[[r2_buckets]]
+binding = "FILES"
+bucket_name = "<your-r2-bucket>"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "<your-d1-db>"
+database_id = "<paste-from-wrangler-d1-create>"
+migrations_dir = "migrations"
