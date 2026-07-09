@@ -113,8 +113,9 @@ function OrgWindow({ record, api, onClose, onSaved }: { record: Row | null; api:
   const [showDel, setShowDel] = useState(false);
   const [delName, setDelName] = useState("");
 
+  const nameMatches = delName.trim() === String(record?.name ?? "").trim();
   async function doDelete() {
-    if (delName !== String(record?.name)) { setErr("Name doesn't match"); return; }
+    if (!nameMatches) { setErr("Name doesn't match"); return; }
     setBusy(true);
     const r = await api(`/api/tenants/${String(record!.id)}`, { method: "DELETE", body: JSON.stringify({ confirm: delName }) });
     setBusy(false);
@@ -182,7 +183,7 @@ function OrgWindow({ record, api, onClose, onSaved }: { record: Row | null; api:
                 <p className="text-xs text-red-700">This permanently removes <b>{String(record?.name)}</b> and all of <b>its own</b> data — users, inventory, schedule, everything. Other organisations are not affected. This cannot be undone. Type the name to confirm:</p>
                 <input value={delName} onChange={(e) => setDelName(e.target.value)} placeholder={String(record?.name)} className={inputCls} />
                 <div className="flex gap-2">
-                  <button type="button" disabled={busy || delName !== String(record?.name)} onClick={doDelete} className="rounded-md bg-red-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:brightness-95 disabled:opacity-50">{busy ? "Deleting…" : "Permanently delete"}</button>
+                  <button type="button" disabled={busy || !nameMatches} onClick={doDelete} className="rounded-md bg-red-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:brightness-95 disabled:opacity-50">{busy ? "Deleting…" : "Permanently delete"}</button>
                   <button type="button" onClick={() => { setShowDel(false); setDelName(""); }} className="rounded-md border border-gray-300 px-3 py-1.5 text-xs text-gray-700 hover:bg-gray-100">Cancel</button>
                 </div>
               </div>
