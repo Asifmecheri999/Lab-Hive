@@ -15,10 +15,10 @@ name = "labhive-api"
 main = "src/index.ts"
 compatibility_date = "2025-01-01"
 compatibility_flags = ["nodejs_compat"]
-# workers.dev URL retired — the frontend now calls api.labsynch.com (the custom domain), and
-# the web->api service binding uses the worker NAME (not a URL), so nothing depends on the
-# workers.dev hostname anymore. Set back to true only if you need that public URL again.
-workers_dev = false
+# workers.dev URL KEPT ENABLED as a fallback. Cached PWA clients still reference it, so disabling
+# it 404s them (CORS failures everywhere). The frontend prefers api.labsynch.com; workers.dev stays
+# as a safety net until every cached client has updated. Do NOT set false while old bundles exist.
+workers_dev = true
 
 # Daily job (06:00 UTC) — trial reminders + auto-expire.
 [triggers]
@@ -93,7 +93,7 @@ migrations_dir = "migrations"
 # ═════════════════════════════════════════════════════════════════════════════
 [env.production]
 name = "labhive-api"
-workers_dev = false
+workers_dev = true
 
 [env.production.triggers]
 crons = ["0 6 * * *"]
