@@ -15,6 +15,10 @@ name = "labhive-api"
 main = "src/index.ts"
 compatibility_date = "2025-01-01"
 compatibility_flags = ["nodejs_compat"]
+# Keep the workers.dev URL LIVE — the current frontend still calls it. Wrangler DISABLES
+# workers.dev on deploy by default when this is absent, which would break the live app.
+# Only set this to false (or remove it) AFTER the frontend has switched to api.labsynch.com.
+workers_dev = true
 
 # Daily job (06:00 UTC) — trial reminders + auto-expire.
 [triggers]
@@ -41,6 +45,14 @@ binding = "DB"
 database_name = "labhive"
 database_id = "b9834772-8951-4cef-887e-6b0166ab6659"
 migrations_dir = "migrations"
+
+# Custom domain for the PRODUCTION API worker (labhive-api). This is what `wrangler deploy`
+# (the CI default, no --env) reads. Attaching a custom domain does NOT remove the workers.dev
+# URL — both hostnames serve the same worker, so nothing breaks until the frontend is switched
+# over. Deliberately NOT added to [env.staging]. `wrangler dev` ignores routes (serves localhost).
+[[routes]]
+pattern = "api.labsynch.com"
+custom_domain = true
 
 # ═════════════════════════════════════════════════════════════════════════════
 # STAGING  →  deploy with:  wrangler deploy --env staging
@@ -81,6 +93,7 @@ migrations_dir = "migrations"
 # ═════════════════════════════════════════════════════════════════════════════
 [env.production]
 name = "labhive-api"
+workers_dev = true
 
 [env.production.triggers]
 crons = ["0 6 * * *"]
@@ -100,3 +113,9 @@ binding = "DB"
 database_name = "labhive"
 database_id = "b9834772-8951-4cef-887e-6b0166ab6659"
 migrations_dir = "migrations"
+
+# Same custom domain when deploying via `--env production` (keeps both prod deploy paths
+# consistent — named envs don't inherit top-level routes, so it's repeated here on purpose).
+[[env.production.routes]]
+pattern = "api.labsynch.com"
+custom_domain = true
