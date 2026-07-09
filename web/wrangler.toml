@@ -26,8 +26,8 @@ binding = "API"
 service = "labhive-api"
 
 [vars]
-NEXT_PUBLIC_API_URL = "https://labhive-api.asifmecheri999.workers.dev"
-API_URL = "https://labhive-api.asifmecheri999.workers.dev"
+NEXT_PUBLIC_API_URL = "https://api.labsynch.com"
+API_URL = "https://api.labsynch.com"
 
 # ═════════════════════════════════════════════════════════════════════════════
 # STAGING  →  build with NEXT_PUBLIC_API_URL=<staging API>, then:
@@ -69,5 +69,5 @@ binding = "API"
 service = "labhive-api"
 
 [env.production.vars]
-NEXT_PUBLIC_API_URL = "https://labhive-api.asifmecheri999.workers.dev"
-API_URL = "https://labhive-api.asifmecheri999.workers.dev"
+NEXT_PUBLIC_API_URL = "https://api.labsynch.com"
+API_URL = "https://api.labsynch.com"

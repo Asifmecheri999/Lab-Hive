@@ -50,4 +50,4 @@ jobs:
       - name: Build & deploy frontend
         run: cd web && npx opennextjs-cloudflare build && npx opennextjs-cloudflare deploy
         env:
-          NEXT_PUBLIC_API_URL: https://labhive-api.asifmecheri999.workers.dev
+          NEXT_PUBLIC_API_URL: https://api.labsynch.com

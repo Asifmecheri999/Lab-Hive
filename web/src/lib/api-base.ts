@@ -1,7 +1,7 @@
 import { getCloudflareContext } from "@opennextjs/cloudflare";
 
 // Fallback API base for local dev (next dev reads .env.local) or if the binding is absent.
-const API_URL = process.env.API_URL ?? "https://labhive-api.asifmecheri999.workers.dev";
+const API_URL = process.env.API_URL ?? "https://api.labsynch.com";
 
 // Low-level request to the API. Prefers the Cloudflare service binding (Worker->Worker,
 // no public hop / no loopback); falls back to a normal fetch in dev.
