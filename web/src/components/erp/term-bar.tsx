@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Window, Button } from "./window";
 import { workDaysOf, dayStartOf, dayEndOf, type Term } from "@/lib/semester";
 import { API_URL } from "@/lib/api-url";
+import { retryFetch } from "@/lib/fetch-retry";
 
 const inputCls = "w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:border-[#00C9A7] focus:outline-none focus:ring-1 focus:ring-[#00C9A7]";
 const LS_KEY = "labhive.termId";
@@ -18,7 +19,7 @@ export function TermBar({ token, canWrite, onSelect, showManage = true }: { toke
   const [dialog, setDialog] = useState<null | { mode: "new" | "edit" | "dup"; term?: Term }>(null);
 
   const api = useCallback((p: string, i?: RequestInit) =>
-    fetch(`${API_URL}${p}`, { ...i, headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}`, ...(i?.headers ?? {}) } }), [token]);
+    retryFetch(`${API_URL}${p}`, { ...i, headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}`, ...(i?.headers ?? {}) } }), [token]);
 
   const pick = useCallback((list: Term[], wantId: string) => {
     const found = list.find((t) => t.id === wantId) ?? list[0] ?? null;

@@ -6,6 +6,7 @@ import { Window, Button } from "./window";
 import { TermBar } from "./term-bar";
 import { SESSION_TYPES, weeksOf, weekLabel, workDaysOf, type Term } from "@/lib/semester";
 import { API_URL } from "@/lib/api-url";
+import { retryFetch } from "@/lib/fetch-retry";
 
 const WRITE = ["LAB_TECHNICIAN", "LAB_COORDINATOR", "LAB_MANAGER", "ADMIN", "FACULTY"];
 type Row = Record<string, unknown>;
@@ -39,7 +40,7 @@ export function ScheduleModule({ token, role }: { token: string; role: string })
   const [toast, setToast] = useState("");
 
   const api = useCallback((p: string, i?: RequestInit) =>
-    fetch(`${API_URL}${p}`, { ...i, headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}`, ...(i?.headers ?? {}) } }), [token]);
+    retryFetch(`${API_URL}${p}`, { ...i, headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}`, ...(i?.headers ?? {}) } }), [token]);
 
   const load = useCallback(async () => {
     setLoading(true); setErr("");

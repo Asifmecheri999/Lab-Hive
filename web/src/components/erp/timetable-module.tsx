@@ -6,6 +6,7 @@ import { Window, Button } from "./window";
 import { TermBar } from "./term-bar";
 import { KIND_COLOR, KIND_LABEL, weeksOf, weekLabel, workDaysOf, dayStartOf, dayEndOf, type Term } from "@/lib/semester";
 import { API_URL } from "@/lib/api-url";
+import { retryFetch } from "@/lib/fetch-retry";
 
 const WRITE = ["LAB_TECHNICIAN", "LAB_COORDINATOR", "LAB_MANAGER", "ADMIN", "FACULTY"];
 const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -37,7 +38,7 @@ export function TimetableModule({ token, role }: { token: string; role: string }
   const [people, setPeople] = useState<string[]>([]);
 
   const api = useCallback((p: string, i?: RequestInit) =>
-    fetch(`${API_URL}${p}`, { ...i, headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}`, ...(i?.headers ?? {}) } }), [token]);
+    retryFetch(`${API_URL}${p}`, { ...i, headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}`, ...(i?.headers ?? {}) } }), [token]);
   useEffect(() => {
     api("/api/schedule/labs").then((r) => (r.ok ? r.json() : [])).then(setLabsAll).catch(() => {});
     api("/api/experiments/people").then((r) => (r.ok ? r.json() : [])).then((l: { name: string }[]) => setPeople(l.map((p) => p.name))).catch(() => {});
@@ -46,7 +47,7 @@ export function TimetableModule({ token, role }: { token: string; role: string }
   const load = useCallback(async (termId: string) => {
     setLoading(true); setErr("");
     try {
-      const r = await fetch(`${API_URL}/api/timetable?termId=${termId}`, { headers: { Authorization: `Bearer ${token}` } });
+      const r = await retryFetch(`${API_URL}/api/timetable?termId=${termId}`, { headers: { Authorization: `Bearer ${token}` } });
       if (r.status === 401) { signOut({ callbackUrl: "/login" }); return; }
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       setEntries(await r.json());
@@ -81,7 +82,7 @@ export function TimetableModule({ token, role }: { token: string; role: string }
 
   async function del(id: string) {
     if (!confirm("Remove this session from the timetable?")) return;
-    const r = await fetch(`${API_URL}/api/timetable/${id}`, { method: "DELETE", headers: { Authorization: `Bearer ${token}` } });
+    const r = await retryFetch(`${API_URL}/api/timetable/${id}`, { method: "DELETE", headers: { Authorization: `Bearer ${token}` } });
     if (r.ok && term) { setSel(null); load(term.id); }
   }
 
