@@ -97,21 +97,21 @@ tenants.delete('/:id', async (c) => {
 
   // Find every tenant-scoped table dynamically (covers current + future models), delete only this tenant's rows.
   const tables = await prisma.$queryRawUnsafe<{ name: string }[]>(`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%' AND name NOT LIKE '_prisma%'`)
-  let pending: string[] = []
+  const pending: string[] = []
   for (const { name } of tables) {
     const cols = await prisma.$queryRawUnsafe<{ name: string }[]>(`PRAGMA table_info("${name}")`)
     if (cols.some((col) => col.name === 'tenantId')) pending.push(name)
   }
-  // Retry passes resolve any foreign-key ordering between this tenant's own rows.
-  for (let pass = 0; pass < 4 && pending.length; pass++) {
-    const still: string[] = []
-    for (const name of pending) {
-      try { await prisma.$executeRawUnsafe(`DELETE FROM "${name}" WHERE "tenantId" = ?`, id) }
-      catch { still.push(name) }
-    }
-    pending = still
-  }
-  await prisma.tenant.delete({ where: { id } })
+  // Delete this tenant's rows across every scoped table + the tenant itself in ONE atomic D1 batch.
+  // `defer_foreign_keys` makes the deletes order-independent (no parent/child juggling), and a single
+  // batch replaces the ~100 sequential queries that previously made large deletes hang / blow past
+  // the Worker subrequest limit. If anything fails the whole batch rolls back — no half-deleted org.
+  const db = c.env.DB
+  await db.batch([
+    db.prepare('PRAGMA defer_foreign_keys = ON'),
+    ...pending.map((name) => db.prepare(`DELETE FROM "${name}" WHERE "tenantId" = ?`).bind(id)),
+    db.prepare('DELETE FROM "Tenant" WHERE "id" = ?').bind(id),
+  ])
   return c.json({ ok: true })
 })
 
