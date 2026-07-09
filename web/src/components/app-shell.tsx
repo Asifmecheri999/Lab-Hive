@@ -109,14 +109,24 @@ export function AppShell({
     // requests carrying the OLD token — prevents stale-token "fetch error" noise.
     const ctrl = new AbortController();
     const opt = { headers: { Authorization: `Bearer ${token}` }, signal: ctrl.signal };
-    const load = () => Promise.all([
-      retryFetch(`${API_URL}/api/requests`, opt).then((r) => (r.ok ? r.json() : [])).catch(() => []),
-      retryFetch(`${API_URL}/api/portal-requests`, opt).then((r) => (r.ok ? r.json() : [])).catch(() => []),
-      retryFetch(`${API_URL}/api/safety/ra`, opt).then((r) => (r.ok ? r.json() : [])).catch(() => []),
-      retryFetch(`${API_URL}/api/activities`, opt).then((r) => (r.ok ? r.json() : [])).catch(() => []),
-      retryFetch(`${API_URL}/api/comments/feed`, opt).then((r) => (r.ok ? r.json() : [])).catch(() => []),
-      retryFetch(`${API_URL}/api/procurement`, opt).then((r) => (r.ok ? r.json() : [])).catch(() => []),
-    ]).then(([jobs, portal, ra, acts, cmts, proc]) => setNotifs(buildAll(Array.isArray(jobs) ? jobs : [], Array.isArray(portal) ? portal : [], Array.isArray(ra) ? ra : [], Array.isArray(acts) ? acts : [], Array.isArray(cmts) ? cmts : [], Array.isArray(proc) ? proc : [], user.role ?? "", user.email ?? "")));
+    // Load notifications ONE AT A TIME instead of a 6-wide parallel burst. Firing six
+    // DB-querying requests at once — on top of each page's own data — overwhelms the Worker
+    // (Prisma spins up per request) and it starts returning 504s. These are background alerts,
+    // so fetching them sequentially (slightly slower) keeps peak concurrency low and stable.
+    const one = async (path: string): Promise<unknown> => {
+      try { const r = await retryFetch(`${API_URL}${path}`, opt); return r.ok ? await r.json() : []; }
+      catch { return []; }
+    };
+    const arr = (v: unknown) => (Array.isArray(v) ? v : []);
+    const load = async () => {
+      const jobs = await one("/api/requests");
+      const portal = await one("/api/portal-requests");
+      const ra = await one("/api/safety/ra");
+      const acts = await one("/api/activities");
+      const cmts = await one("/api/comments/feed");
+      const proc = await one("/api/procurement");
+      setNotifs(buildAll(arr(jobs), arr(portal), arr(ra), arr(acts), arr(cmts), arr(proc), user.role ?? "", user.email ?? ""));
+    };
     load();
     const iv = setInterval(load, 30000); // poll so new alerts (and the sound) arrive without a manual refresh
     const onWake = () => { if (!document.hidden) load(); }; // refresh when returning to the tab
