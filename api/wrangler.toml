@@ -15,10 +15,10 @@ name = "labhive-api"
 main = "src/index.ts"
 compatibility_date = "2025-01-01"
 compatibility_flags = ["nodejs_compat"]
-# Keep the workers.dev URL LIVE — the current frontend still calls it. Wrangler DISABLES
-# workers.dev on deploy by default when this is absent, which would break the live app.
-# Only set this to false (or remove it) AFTER the frontend has switched to api.labsynch.com.
-workers_dev = true
+# workers.dev URL retired — the frontend now calls api.labsynch.com (the custom domain), and
+# the web->api service binding uses the worker NAME (not a URL), so nothing depends on the
+# workers.dev hostname anymore. Set back to true only if you need that public URL again.
+workers_dev = false
 
 # Daily job (06:00 UTC) — trial reminders + auto-expire.
 [triggers]
@@ -93,7 +93,7 @@ migrations_dir = "migrations"
 # ═════════════════════════════════════════════════════════════════════════════
 [env.production]
 name = "labhive-api"
-workers_dev = true
+workers_dev = false
 
 [env.production.triggers]
 crons = ["0 6 * * *"]
