@@ -14,7 +14,7 @@
   },
   "keywords": [],
   "author": "",
-  "license": "ISC",
+  "license": "MIT",
   "dependencies": {
     "@prisma/adapter-d1": "^7.8.0",
     "@prisma/client": "^7.8.0",
