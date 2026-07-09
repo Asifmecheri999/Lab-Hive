@@ -69,13 +69,14 @@ users.post('/', async (c) => {
       select: { id: true, email: true, name: true, role: true },
     })
     // Welcome email with their credentials + sign-in link.
+    // Fire-and-forget: never block (or fail) the user-create on the email provider.
     if (b.notify !== false) {
-      await sendEmail(c.env, {
+      c.executionCtx?.waitUntil(sendEmail(c.env, {
         to: u.email,
         subject: 'Your LabSynch account is ready',
         html: mailLayout('Welcome to LabSynch', `<p style="margin:0 0 4px;">Hi ${u.name},</p><p style="margin:0;">An account has been created for you on <b>LabSynch</b>, your lab operations platform. Here are your sign-in details:</p>${mailPanel(`<b>Email:</b> ${u.email}<br/><b>Temporary password:</b> ${String(b.password)}`)}${mailButton(`${APP_URL}/login`, 'Sign in to LabSynch')}<p style="margin:0;color:#64748b;">For your security, please change your password after signing in — you can use “Forgot password?” on the sign-in page at any time.</p>`, 'Your LabSynch account is ready'),
         text: `Welcome to LabSynch. Sign in at ${APP_URL}/login\nEmail: ${u.email}\nTemporary password: ${String(b.password)}\nPlease change it after signing in.`,
-      })
+      }))
     }
     return c.json(u, 201)
   } catch {

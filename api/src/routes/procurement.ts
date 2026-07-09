@@ -168,19 +168,21 @@ procurement.patch('/:id/status', requireAuth, async (c) => {
     ...(status === 'submitted' ? { decisionNote: null } : {}),
   } })
 
-  // Notifications (best-effort).
-  try {
-    if (status === 'submitted' && req.approverEmail) {
-      await sendEmail(c.env, { to: req.approverEmail, subject: `Approval needed — ${req.title}`,
-        html: mailLayout('A purchase request needs your approval', `<p style="margin:0 0 4px;"><b>${req.title}</b> has been submitted for your approval.</p><p style="margin:0;">Review the details and approve, hold, or reject it:</p>${mailButton(`${APP_URL}/approvals`, 'Review the request')}`, `Approval needed: ${req.title}`),
-        text: `${req.title} needs your approval. Review at ${APP_URL}/approvals` })
-    } else if (isDecision && req.submittedById) {
-      const creator = await prisma.user.findUnique({ where: { id: req.submittedById }, select: { email: true } })
-      if (creator?.email) await sendEmail(c.env, { to: creator.email, subject: `Purchase request ${status} — ${req.title}`,
-        html: mailLayout(`Purchase request ${status.replace('_', ' ')}`, `<p style="margin:0 0 8px;">Your purchase request <b>${req.title}</b> was <b>${status.replace('_', ' ')}</b>${u.name ? ` by ${u.name}` : ''}.</p>${note ? mailPanel(`<b>Message:</b> ${String(note)}`) : ''}${status === 'approved' ? mailButton(`${APP_URL}/procurement`, 'Proceed to order') : ''}`, `Your request was ${status.replace('_', ' ')}`),
-        text: `Your purchase request "${req.title}" was ${status}.${note ? ` Message: ${String(note)}` : ''}` })
-    }
-  } catch { /* email is best-effort */ }
+  // Notifications (best-effort, sent in the background so the status change returns immediately).
+  c.executionCtx?.waitUntil((async () => {
+    try {
+      if (status === 'submitted' && req.approverEmail) {
+        await sendEmail(c.env, { to: req.approverEmail, subject: `Approval needed — ${req.title}`,
+          html: mailLayout('A purchase request needs your approval', `<p style="margin:0 0 4px;"><b>${req.title}</b> has been submitted for your approval.</p><p style="margin:0;">Review the details and approve, hold, or reject it:</p>${mailButton(`${APP_URL}/approvals`, 'Review the request')}`, `Approval needed: ${req.title}`),
+          text: `${req.title} needs your approval. Review at ${APP_URL}/approvals` })
+      } else if (isDecision && req.submittedById) {
+        const creator = await prisma.user.findUnique({ where: { id: req.submittedById }, select: { email: true } })
+        if (creator?.email) await sendEmail(c.env, { to: creator.email, subject: `Purchase request ${status} — ${req.title}`,
+          html: mailLayout(`Purchase request ${status.replace('_', ' ')}`, `<p style="margin:0 0 8px;">Your purchase request <b>${req.title}</b> was <b>${status.replace('_', ' ')}</b>${u.name ? ` by ${u.name}` : ''}.</p>${note ? mailPanel(`<b>Message:</b> ${String(note)}`) : ''}${status === 'approved' ? mailButton(`${APP_URL}/procurement`, 'Proceed to order') : ''}`, `Your request was ${status.replace('_', ' ')}`),
+          text: `Your purchase request "${req.title}" was ${status}.${note ? ` Message: ${String(note)}` : ''}` })
+      }
+    } catch { /* email is best-effort */ }
+  })())
   return c.json(p)
 })
 
