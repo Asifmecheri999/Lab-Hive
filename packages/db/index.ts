@@ -21,11 +21,18 @@ function raceTimeout<T>(p: Promise<T>, label: string): Promise<T> {
   return Promise.race([p, deadline]).finally(() => { if (timer) clearTimeout(timer) }) as Promise<T>
 }
 
-// Build a request-scoped Prisma client bound to a Cloudflare D1 binding.
-// (Per-request client is the correct Workers pattern — no long-lived pool.)
-// A client extension applies the query timeout to EVERY operation automatically, so no
-// call-site needs to remember it.
+// Reuse ONE Prisma client per D1 binding. Building a PrismaClient (which spins up a query
+// engine) on every request is CPU-heavy; under the app-shell's parallel request burst that
+// thrashing pushes the Worker past its limits and the runtime kills requests (surfacing as
+// edge 504s with no CORS header). The Workers isolate and its D1 binding are stable across
+// requests, so a WeakMap keyed by the binding reuses the same client — and if the binding is
+// ever a different object, it simply builds a fresh one (so this can never use a stale handle).
+// A client extension applies the query timeout to EVERY operation automatically.
+const clientCache = new WeakMap<D1Database, PrismaClient>()
+
 export function getPrisma(d1: D1Database): PrismaClient {
+  const cached = clientCache.get(d1)
+  if (cached) return cached
   const base = new PrismaClient({ adapter: new PrismaD1(d1) })
   const extended = base.$extends({
     query: {
@@ -33,6 +40,7 @@ export function getPrisma(d1: D1Database): PrismaClient {
         return raceTimeout(query(args), `${model ?? 'raw'}.${operation}`)
       },
     },
-  })
-  return extended as unknown as PrismaClient
+  }) as unknown as PrismaClient
+  clientCache.set(d1, extended)
+  return extended
 }
