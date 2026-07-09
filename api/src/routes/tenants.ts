@@ -39,7 +39,7 @@ tenants.post('/', async (c) => {
   if (exists) return c.json({ error: 'A user with that email already exists' }, 409)
   const trialEndsAt = b.trialEndsAt ? new Date(b.trialEndsAt) : new Date(Date.now() + (Number(b.trialDays) || 30) * 86400000)
   // 'active' (not 'trial') so a workspace never auto-expires or gets locked out — it's free forever.
-  const tenant = await prisma.tenant.create({ data: { name: b.orgName, plan, status: 'active', trialEndsAt, ownerEmail: email } })
+  const tenant = await prisma.tenant.create({ data: { name: String(b.orgName).trim(), plan, status: 'active', trialEndsAt, ownerEmail: email } })
   const pw = tempPassword()
   await prisma.user.create({ data: { tenantId: tenant.id, email, name: b.ownerName, role: 'ADMIN', passwordHash: await hashPassword(pw), mustResetPassword: true } })
   await sendEmail(c.env, {
@@ -56,7 +56,7 @@ tenants.patch('/:id', async (c) => {
   const prisma = getPrisma(c.env.DB)
   const b = await c.req.json().catch(() => ({}))
   const data: Record<string, unknown> = {}
-  if (b.name) data.name = b.name
+  if (b.name) data.name = String(b.name).trim()
   if (b.plan && PLANS.includes(b.plan)) data.plan = b.plan
   if (b.status) data.status = b.status
   if (b.trialEndsAt !== undefined) data.trialEndsAt = b.trialEndsAt ? new Date(b.trialEndsAt) : null
@@ -93,7 +93,7 @@ tenants.delete('/:id', async (c) => {
   const tenant = await prisma.tenant.findUnique({ where: { id } })
   if (!tenant) return c.json({ error: 'Not found' }, 404)
   const b = await c.req.json().catch(() => ({}))
-  if (String(b.confirm ?? '').trim() !== tenant.name) return c.json({ error: 'Type the organisation name exactly to confirm' }, 400)
+  if (String(b.confirm ?? '').trim() !== String(tenant.name ?? '').trim()) return c.json({ error: 'Type the organisation name exactly to confirm' }, 400)
 
   // Find every tenant-scoped table dynamically (covers current + future models), delete only this tenant's rows.
   const tables = await prisma.$queryRawUnsafe<{ name: string }[]>(`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%' AND name NOT LIKE '_prisma%'`)
@@ -102,16 +102,29 @@ tenants.delete('/:id', async (c) => {
     const cols = await prisma.$queryRawUnsafe<{ name: string }[]>(`PRAGMA table_info("${name}")`)
     if (cols.some((col) => col.name === 'tenantId')) pending.push(name)
   }
-  // Delete this tenant's rows across every scoped table + the tenant itself in ONE atomic D1 batch.
-  // `defer_foreign_keys` makes the deletes order-independent (no parent/child juggling), and a single
-  // batch replaces the ~100 sequential queries that previously made large deletes hang / blow past
-  // the Worker subrequest limit. If anything fails the whole batch rolls back — no half-deleted org.
+  // Delete this tenant's rows across every scoped table + the tenant itself. Fast path: ONE atomic
+  // D1 batch with `defer_foreign_keys` (order-independent; avoids the ~100 sequential queries that
+  // made large deletes hang). If the batch is rejected (e.g. FK checks not deferred as expected),
+  // fall back to sequential child->parent retry passes so the delete still completes.
   const db = c.env.DB
-  await db.batch([
-    db.prepare('PRAGMA defer_foreign_keys = ON'),
-    ...pending.map((name) => db.prepare(`DELETE FROM "${name}" WHERE "tenantId" = ?`).bind(id)),
-    db.prepare('DELETE FROM "Tenant" WHERE "id" = ?').bind(id),
-  ])
+  try {
+    await db.batch([
+      db.prepare('PRAGMA defer_foreign_keys = ON'),
+      ...pending.map((name) => db.prepare(`DELETE FROM "${name}" WHERE "tenantId" = ?`).bind(id)),
+      db.prepare('DELETE FROM "Tenant" WHERE "id" = ?').bind(id),
+    ])
+  } catch {
+    let remaining = [...pending]
+    for (let pass = 0; pass < 8 && remaining.length; pass++) {
+      const still: string[] = []
+      for (const name of remaining) {
+        try { await prisma.$executeRawUnsafe(`DELETE FROM "${name}" WHERE "tenantId" = ?`, id) }
+        catch { still.push(name) }
+      }
+      remaining = still
+    }
+    await prisma.tenant.delete({ where: { id } })
+  }
   return c.json({ ok: true })
 })
 
