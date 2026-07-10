@@ -3,7 +3,7 @@ import { Hono } from 'hono'
 import type { Env } from '../lib/db'
 import { getPrisma } from '../lib/db'
 import { requireAuth, LAB_TEAM, type AuthVars } from '../middleware/auth'
-import { notifyUser } from '../lib/webpush'
+import { notify } from '../lib/notify'
 
 const comments = new Hono<{ Bindings: Env; Variables: AuthVars }>()
 
@@ -108,7 +108,7 @@ comments.post('/', requireAuth, async (c) => {
     const ownerId = parent?.ownerId ?? null
     if (ownerId && ownerId !== u.sub) {
       const url = b.refType === 'RA' ? '/requests?tab=ra' : b.refType === 'JOB' ? '/requests?tab=jobs' : '/requests'
-      c.executionCtx?.waitUntil(notifyUser(c.env, ownerId, { title: `New message from ${u.name ?? 'the lab team'}`, body: String(b.body ?? 'Sent a file'), url }))
+      c.executionCtx?.waitUntil(notify(c.env, ownerId, u.tenant, { type: 'COMMENT', event: 'MESSAGE', title: `New message from ${u.name ?? 'the lab team'}`, body: String(b.body ?? 'Sent a file'), refType: String(b.refType), refId: String(b.refId), url }))
     }
   } catch { /* notifications are best-effort */ }
   return c.json(comment, 201)

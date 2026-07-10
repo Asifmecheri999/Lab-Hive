@@ -4,7 +4,7 @@ import { Hono } from 'hono'
 import type { Env } from '../lib/db'
 import { getPrisma } from '../lib/db'
 import { requireAuth, requireRole, LAB_TEAM, type AuthVars } from '../middleware/auth'
-import { notifyUser } from '../lib/webpush'
+import { notify, notifyEach, labTeamIds } from '../lib/notify'
 
 const portal = new Hono<{ Bindings: Env; Variables: AuthVars }>()
 const portalTab = (kind?: string | null) => (kind === 'PPE' ? 'ppe' : kind === 'ACCESS' ? 'access' : 'resource')
@@ -40,6 +40,12 @@ portal.post('/', requireAuth, async (c) => {
       items: b.items ? JSON.stringify(b.items) : null,
     },
   })
+  // Alert the lab team that a new request needs handling.
+  c.executionCtx?.waitUntil((async () => {
+    const ids = (await labTeamIds(c.env, u.tenant)).filter((id) => id !== u.sub)
+    const label = req.kind === 'PPE' ? 'PPE' : req.kind === 'ACCESS' ? 'lab access' : 'resource'
+    await notifyEach(c.env, ids, u.tenant, { type: req.kind, event: 'SUBMITTED', title: `New ${label} request`, body: u.name ?? '', refType: req.kind, refId: req.id, url: `/requests?tab=${portalTab(req.kind)}` })
+  })())
   return c.json(req, 201)
 })
 
@@ -114,7 +120,7 @@ portal.post('/:id/:decision', requireRole(...LAB_TEAM), async (c) => {
       },
     })
     await prisma.portalRequest.update({ where: { id }, data: { status: 'issued' } })
-    if (r.userId && r.userId !== u.sub) c.executionCtx?.waitUntil(notifyUser(c.env, r.userId, { title: 'Your request was issued', body: 'Items have been issued to you.', url: `/requests?tab=${portalTab(r.kind)}` }))
+    if (r.userId && r.userId !== u.sub) c.executionCtx?.waitUntil(notify(c.env, r.userId, u.tenant, { type: r.kind, event: 'ISSUED', title: 'Your request was issued', body: 'Items have been issued to you.', refType: r.kind, refId: r.id, url: `/requests?tab=${portalTab(r.kind)}` }))
     return c.json({ ok: true, issuanceId: issuance.id })
   }
 
@@ -125,7 +131,8 @@ portal.post('/:id/:decision', requireRole(...LAB_TEAM), async (c) => {
   const r = await prisma.portalRequest.findUnique({ where: { id } })
   if (r && r.userId && r.userId !== u.sub) {
     const word = decision === 'approve' ? 'approved' : decision === 'reject' ? 'rejected' : 'put on hold'
-    c.executionCtx?.waitUntil(notifyUser(c.env, r.userId, { title: `Your request was ${word}`, body: '', url: `/requests?tab=${portalTab(r.kind)}` }))
+    const ev = decision === 'approve' ? 'APPROVED' : decision === 'reject' ? 'REJECTED' : 'HOLD'
+    c.executionCtx?.waitUntil(notify(c.env, r.userId, u.tenant, { type: r.kind, event: ev, title: `Your request was ${word}`, body: '', refType: r.kind, refId: r.id, url: `/requests?tab=${portalTab(r.kind)}` }))
   }
   return c.json(r)
 })

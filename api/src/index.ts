@@ -30,6 +30,7 @@ import comments from './routes/comments'
 import contact from './routes/contact'
 import push from './routes/push'
 import tenants from './routes/tenants'
+import notifications from './routes/notifications'
 import { runTrialReminders } from './lib/subscriptions'
 
 const app = new Hono<{ Bindings: Env; Variables: AuthVars }>()
@@ -117,6 +118,7 @@ app.route('/api/comments', comments)
 app.route('/api/contact', contact)
 app.route('/api/push', push)
 app.route('/api/tenants', tenants)
+app.route('/api/notifications', notifications)
 
 // Exported for tests (Vitest) so route handlers can be exercised with `app.request(...)`.
 export { app }

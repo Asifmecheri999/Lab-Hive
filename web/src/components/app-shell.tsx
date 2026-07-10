@@ -10,44 +10,8 @@ import { AssistantWidget } from "@/components/assistant-widget";
 import { IdleLogout } from "@/components/idle-logout";
 import { API_URL } from "@/lib/api-url";
 
-const STAFF_ROLES = ["LAB_TECHNICIAN", "LAB_COORDINATOR", "LAB_MANAGER", "ADMIN", "DEAN", "HEAD_OF_SCHOOL"];
-const JOB_STATUS_WORD: Record<string, string> = { APPROVED: "approved", HOLD: "on hold", REJECTED: "rejected", IN_PROGRESS: "in progress", COMPLETED: "completed" };
-const kindWord = (k?: string) => (k === "PPE" ? "lab coat" : k === "RESOURCE" ? "borrowing" : k === "ACCESS" ? "lab access" : "request");
-const portalTab = (k?: string) => (k === "PPE" ? "ppe" : k === "ACCESS" ? "access" : "resource");
-const refTab = (refType?: string, kind?: string) => (refType === "JOB" ? "jobs" : refType === "RA" ? "ra" : portalTab(kind));
-type Notif = { id: string; title: string; sub: string; href: string };
-type JobRow = { id: string; title?: string; status?: string; user?: { name?: string }; approvals?: { comments?: string }[] };
-type PortalRow = { id: string; kind?: string; status?: string; submitterName?: string };
-type RaRow = { id: string; title?: string; status?: string; submittedByName?: string };
-type CommentRow = { id: string; authorName?: string; body?: string; fileUrl?: string; refType?: string; refId?: string; kind?: string };
-type ActRow = { id: string; title?: string; supervisor?: string };
-type ProcRow = { id: string; title?: string; status?: string; kind?: string; approverEmail?: string; decisionNote?: string };
-const LAB_TEAM_F = ["LAB_TECHNICIAN", "LAB_COORDINATOR", "LAB_MANAGER", "ADMIN"];
-const lastComment = (r: JobRow) => (r.approvals ?? []).filter((a) => a.comments).slice(-1)[0]?.comments ?? "";
-function buildAll(jobs: JobRow[], portal: PortalRow[], ra: RaRow[], activities: ActRow[], comments: CommentRow[], proc: ProcRow[], role: string, email: string): Notif[] {
-  const staff = STAFF_ROLES.includes(role);
-  const out: Notif[] = [];
-  // Procurement approvals — both sides.
-  proc.filter((p) => String(p.kind ?? "PURCHASE") !== "BUDGET").forEach((p) => {
-    const routedToMe = !!p.approverEmail && p.approverEmail.toLowerCase() === String(email ?? "").toLowerCase();
-    if (routedToMe && String(p.status) === "submitted") out.push({ id: `pr-ap-${p.id}`, title: `Approval needed: ${p.title ?? ""}`, sub: "Submitted for your decision", href: "/approvals" });
-    if (LAB_TEAM_F.includes(role) && ["approved", "rejected", "on_hold"].includes(String(p.status))) out.push({ id: `pr-de-${p.id}-${p.status}`, title: `Request “${p.title ?? ""}” ${String(p.status).replace("_", " ")}`, sub: String(p.decisionNote ?? ""), href: "/procurement" });
-  });
-  if (staff) {
-    jobs.filter((r) => r.status === "PENDING").forEach((r) => out.push({ id: `j-${r.id}-pending`, title: `New job request: ${r.title ?? ""}`, sub: r.user?.name ?? "", href: `/requests?tab=jobs&open=${r.id}` }));
-    portal.filter((r) => r.status === "pending").forEach((r) => out.push({ id: `p-${r.id}-pending`, title: `New ${kindWord(r.kind)} request`, sub: r.submitterName ?? "", href: `/requests?tab=${portalTab(r.kind)}&open=${r.id}` }));
-    ra.filter((r) => r.status === "submitted").forEach((r) => out.push({ id: `ra-${r.id}-sub`, title: `RA submitted: ${r.title ?? ""}`, sub: r.submittedByName ?? "", href: `/requests?tab=ra&open=${r.id}` }));
-  } else {
-    jobs.filter((r) => r.status && JOB_STATUS_WORD[r.status]).forEach((r) => out.push({ id: `j-${r.id}-${r.status}`, title: `Your job request “${r.title ?? ""}” is ${JOB_STATUS_WORD[r.status as string]}`, sub: String(lastComment(r)), href: `/requests?tab=jobs&open=${r.id}` }));
-    portal.filter((r) => r.status && r.status !== "pending").forEach((r) => out.push({ id: `p-${r.id}-${r.status}`, title: `Your ${kindWord(r.kind)} request is ${r.status}`, sub: "", href: `/requests?tab=${portalTab(r.kind)}&open=${r.id}` }));
-    ra.filter((r) => r.status && r.status !== "submitted").forEach((r) => out.push({ id: `ra-${r.id}-${r.status}`, title: `Your RA “${r.title ?? ""}” is ${r.status}`, sub: "", href: `/requests?tab=ra&open=${r.id}` }));
-  }
-  if (!LAB_TEAM_F.includes(role)) {
-    activities.forEach((a) => out.push({ id: `a-${a.id}`, title: `Activity: ${a.title ?? ""}`, sub: a.supervisor ? `Supervisor: ${a.supervisor}` : "Assigned to you", href: "/activities" }));
-  }
-  comments.forEach((m) => out.push({ id: `c-${m.id}`, title: `New message from ${m.authorName ?? "someone"}`, sub: String(m.body ?? (m.fileUrl ? "Sent a file" : "")), href: m.refId ? `/requests?tab=${refTab(m.refType, m.kind)}&open=${m.refId}` : "/requests" }));
-  return out;
-}
+// Server-persisted notification (from /api/notifications). readAt === null means unread.
+type Notif = { id: string; type?: string; event?: string; title: string; body?: string | null; refType?: string | null; refId?: string | null; url?: string | null; readAt?: string | null; createdAt?: string };
 
 const roleLabel = (r?: string) => (r ? r.split("_").map((w) => w.charAt(0) + w.slice(1).toLowerCase()).join(" ") : "");
 const planLabel = (p?: string) => (p ? `${p.charAt(0).toUpperCase()}${p.slice(1).toLowerCase()} plan` : "");
@@ -86,8 +50,7 @@ export function AppShell({
   const [menu, setMenu] = useState(false);
   const [navOpen, setNavOpen] = useState(false);
   const [notifs, setNotifs] = useState<Notif[]>([]);
-  const [seen, setSeen] = useState<string[]>([]);
-  const [dismissed, setDismissed] = useState<string[]>([]);
+  const [unread, setUnread] = useState(0);
   const [bell, setBell] = useState(false);
   const [soundOn, setSoundOn] = useState(false);
   const prevUnreadRef = useRef(0);
@@ -101,31 +64,22 @@ export function AppShell({
   }, [token]);
 
   useEffect(() => {
-    try { setSeen(JSON.parse(localStorage.getItem("labops.notif.seen") ?? "[]")); } catch {}
-    try { setDismissed(JSON.parse(localStorage.getItem("labops.notif.dismissed") ?? "[]")); } catch {}
     try { setSoundOn(localStorage.getItem("labsynch.notif.sound") === "1"); } catch {}
     if (!token) return;
     // AbortController so switching accounts (token changes) cancels in-flight
     // requests carrying the OLD token — prevents stale-token "fetch error" noise.
     const ctrl = new AbortController();
     const opt = { headers: { Authorization: `Bearer ${token}` }, signal: ctrl.signal };
-    // Load notifications ONE AT A TIME instead of a 6-wide parallel burst. Firing six
-    // DB-querying requests at once — on top of each page's own data — overwhelms the Worker
-    // (Prisma spins up per request) and it starts returning 504s. These are background alerts,
-    // so fetching them sequentially (slightly slower) keeps peak concurrency low and stable.
-    const one = async (path: string): Promise<unknown> => {
-      try { const r = await retryFetch(`${API_URL}${path}`, opt); return r.ok ? await r.json() : []; }
-      catch { return []; }
-    };
-    const arr = (v: unknown) => (Array.isArray(v) ? v : []);
+    // One lightweight call to the server-persisted notification store — the reliable source of
+    // truth for the bell + sidebar. No more deriving from six endpoints (that hammered the Worker).
     const load = async () => {
-      const jobs = await one("/api/requests");
-      const portal = await one("/api/portal-requests");
-      const ra = await one("/api/safety/ra");
-      const acts = await one("/api/activities");
-      const cmts = await one("/api/comments/feed");
-      const proc = await one("/api/procurement");
-      setNotifs(buildAll(arr(jobs), arr(portal), arr(ra), arr(acts), arr(cmts), arr(proc), user.role ?? "", user.email ?? ""));
+      try {
+        const r = await retryFetch(`${API_URL}/api/notifications`, opt);
+        if (!r.ok) return;
+        const d = await r.json();
+        setNotifs(Array.isArray(d.items) ? d.items : []);
+        setUnread(typeof d.unread === "number" ? d.unread : 0);
+      } catch { /* background poll — ignore transient errors */ }
     };
     load();
     const iv = setInterval(load, 30000); // poll so new alerts (and the sound) arrive without a manual refresh
@@ -133,26 +87,26 @@ export function AppShell({
     window.addEventListener("focus", onWake);
     document.addEventListener("visibilitychange", onWake);
     return () => { clearInterval(iv); ctrl.abort(); window.removeEventListener("focus", onWake); document.removeEventListener("visibilitychange", onWake); };
-  }, [token, user.role, user.email]);
-  const visible = notifs.filter((n) => !dismissed.includes(n.id));
-  const unread = visible.filter((n) => !seen.includes(n.id)).length;
+  }, [token]);
   // Chime when the unread count goes up (skips the first load so it doesn't ring on every page open).
   useEffect(() => {
     if (!initRef.current) { initRef.current = true; prevUnreadRef.current = unread; return; }
     if (soundOn && unread > prevUnreadRef.current) playChime();
     prevUnreadRef.current = unread;
   }, [unread, soundOn]);
-  function toggleBell() {
-    setBell((o) => {
-      const next = !o;
-      if (next && notifs.length) { const ids = notifs.map((n) => n.id); setSeen(ids); try { localStorage.setItem("labops.notif.seen", JSON.stringify(ids)); } catch {} }
-      return next;
-    });
+  function toggleBell() { setBell((o) => !o); }
+  // "Clear all" deletes every notification server-side, so the bell stays empty after logout/login.
+  async function clearNotifs() {
+    setNotifs([]); setUnread(0);
+    try { await fetch(`${API_URL}/api/notifications`, { method: "DELETE", headers: { Authorization: `Bearer ${token}` } }); } catch {}
   }
-  function clearNotifs() {
-    const ids = notifs.map((n) => n.id);
-    setDismissed(ids); setSeen(ids);
-    try { localStorage.setItem("labops.notif.dismissed", JSON.stringify(ids)); localStorage.setItem("labops.notif.seen", JSON.stringify(ids)); } catch {}
+  // Opening a notification marks just that one read (badge ticks down) before navigating.
+  async function openNotif(n: Notif) {
+    setBell(false);
+    if (n.readAt) return;
+    setUnread((u) => Math.max(0, u - 1));
+    setNotifs((prev) => prev.map((x) => (x.id === n.id ? { ...x, readAt: new Date().toISOString() } : x)));
+    try { await fetch(`${API_URL}/api/notifications/${n.id}/read`, { method: "POST", headers: { Authorization: `Bearer ${token}` } }); } catch {}
   }
 
   const isActive = (href: string) => pathname === href || pathname.startsWith(href + "/");
@@ -204,12 +158,12 @@ export function AppShell({
                 <>
                   <div className="fixed inset-0 z-30" onClick={() => setBell(false)} />
                   <div className="absolute right-0 z-40 mt-2 w-80 max-w-[calc(100vw-1.5rem)] overflow-hidden rounded-xl border border-gray-100 bg-white shadow-2xl">
-                    <div className="flex items-center justify-between border-b border-gray-100 px-4 py-2.5"><span className="text-sm font-semibold text-[#0A1628]">Notifications</span>{visible.length > 0 && <button onClick={clearNotifs} className="text-xs font-medium text-gray-500 hover:text-red-600">Clear all</button>}</div>
+                    <div className="flex items-center justify-between border-b border-gray-100 px-4 py-2.5"><span className="text-sm font-semibold text-[#0A1628]">Notifications</span>{notifs.length > 0 && <button onClick={clearNotifs} className="text-xs font-medium text-gray-500 hover:text-red-600">Clear all</button>}</div>
                     <div className="max-h-96 overflow-auto">
-                      {visible.length === 0 ? <p className="px-4 py-6 text-center text-sm text-gray-400">You&apos;re all caught up.</p> : visible.map((n) => (
-                        <Link key={n.id} href={n.href} onClick={() => setBell(false)} className="block border-b border-gray-50 px-4 py-2.5 hover:bg-gray-50">
-                          <p className="text-sm font-medium text-[#0A1628]">{n.title}</p>
-                          {n.sub && <p className="mt-0.5 text-xs text-gray-500">{n.sub}</p>}
+                      {notifs.length === 0 ? <p className="px-4 py-6 text-center text-sm text-gray-400">You&apos;re all caught up.</p> : notifs.map((n) => (
+                        <Link key={n.id} href={n.url || "/requests"} onClick={() => openNotif(n)} className={`block border-b border-gray-50 px-4 py-2.5 hover:bg-gray-50 ${!n.readAt ? "bg-[#00C9A7]/5" : ""}`}>
+                          <p className="flex items-start gap-2 text-sm font-medium text-[#0A1628]">{!n.readAt && <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-[#00C9A7]" />}<span>{n.title}</span></p>
+                          {n.body && <p className="mt-0.5 text-xs text-gray-500">{n.body}</p>}
                         </Link>
                       ))}
                     </div>

@@ -4,7 +4,7 @@ import { Hono } from 'hono'
 import type { Env } from '../lib/db'
 import { getPrisma } from '../lib/db'
 import { requireAuth, requireRole, LAB_TEAM, type AuthVars } from '../middleware/auth'
-import { notifyUser } from '../lib/webpush'
+import { notify, notifyEach, labTeamIds } from '../lib/notify'
 
 const TYPES = ['THREE_D_PRINT', 'LASER_CUT', 'CNC', 'SUPERVISED_SESSION', 'EQUIPMENT_USE', 'OTHER']
 const STATUSES = ['PENDING', 'APPROVED', 'IN_PROGRESS', 'COMPLETED', 'REJECTED', 'HOLD']
@@ -84,6 +84,11 @@ requests.post('/', requireAuth, async (c) => {
       userId: u.sub,
     },
   })
+  // Alert the lab team that a new job request needs handling.
+  c.executionCtx?.waitUntil((async () => {
+    const ids = (await labTeamIds(c.env, u.tenant)).filter((id) => id !== u.sub)
+    await notifyEach(c.env, ids, u.tenant, { type: 'JOB', event: 'SUBMITTED', title: `New job request: ${r.title}`, body: u.name ?? '', refType: 'JOB', refId: r.id, url: '/requests?tab=jobs' })
+  })())
   return c.json(r, 201)
 })
 
@@ -107,7 +112,7 @@ requests.post('/:id/:decision', requireRole(...DECISION_ROLES), async (c) => {
   // Notify the requester of the decision.
   const word = decision === 'approve' ? 'approved' : decision === 'reject' ? 'rejected' : 'put on hold'
   if (existing.userId && existing.userId !== u.sub) {
-    c.executionCtx?.waitUntil(notifyUser(c.env, existing.userId, { title: `Your job request was ${word}`, body: comments ? String(comments) : String(existing.title ?? ''), url: '/requests?tab=jobs' }))
+    c.executionCtx?.waitUntil(notify(c.env, existing.userId, u.tenant, { type: 'JOB', event: status, title: `Your job request was ${word}`, body: comments ? String(comments) : String(existing.title ?? ''), refType: 'JOB', refId: id, url: '/requests?tab=jobs' }))
   }
   return c.json(r)
 })
@@ -122,6 +127,10 @@ requests.patch('/:id/status', requireRole(...LAB_TEAM), async (c) => {
   const { count } = await prisma.serviceRequest.updateMany({ where: { id, tenantId: u.tenant }, data: { status } })
   if (count === 0) return c.json({ error: 'Not found' }, 404)
   const r = await prisma.serviceRequest.findUnique({ where: { id } })
+  const word = status === 'IN_PROGRESS' ? 'is now in progress' : status === 'COMPLETED' ? 'is complete' : `is now ${String(status).toLowerCase()}`
+  if (r?.userId && r.userId !== u.sub) {
+    c.executionCtx?.waitUntil(notify(c.env, r.userId, u.tenant, { type: 'JOB', event: status, title: `Your job request ${word}`, body: String(r.title ?? ''), refType: 'JOB', refId: id, url: '/requests?tab=jobs' }))
+  }
   return c.json(r)
 })
 

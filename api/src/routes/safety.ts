@@ -3,7 +3,7 @@ import { Hono } from 'hono'
 import type { Env } from '../lib/db'
 import { getPrisma } from '../lib/db'
 import { requireAuth, requireRole, LAB_TEAM, type AuthVars } from '../middleware/auth'
-import { notifyUser } from '../lib/webpush'
+import { notify, notifyEach, labTeamIds } from '../lib/notify'
 
 const safety = new Hono<{ Bindings: Env; Variables: AuthVars }>()
 
@@ -141,6 +141,11 @@ safety.post('/ra', requireAuth, async (c) => {
       submittedByName: u.name ?? null,
     },
   })
+  // Alert the lab team to review the new RA.
+  c.executionCtx?.waitUntil((async () => {
+    const ids = (await labTeamIds(c.env, u.tenant)).filter((id) => id !== u.sub)
+    await notifyEach(c.env, ids, u.tenant, { type: 'RA', event: 'SUBMITTED', title: `New RA submitted: ${doc.title}`, body: u.name ?? '', refType: 'RA', refId: doc.id, url: '/requests?tab=ra' })
+  })())
   return c.json(doc, 201)
 })
 
@@ -173,8 +178,9 @@ safety.post('/ra/:id/:decision', requireRole(...LAB_TEAM), async (c) => {
       data: { status: map[decision], approvedBy: decision === 'approve' ? (u.name ?? 'Lab team') : null, approvedAt: decision === 'approve' ? new Date() : null },
     })
     const word = decision === 'approve' ? 'approved' : decision === 'reject' ? 'rejected' : decision === 'hold' ? 'put on hold' : 'sent back for revision'
+    const ev = decision === 'approve' ? 'APPROVED' : decision === 'reject' ? 'REJECTED' : decision === 'hold' ? 'HOLD' : 'REVISE'
     if (doc.submittedById && doc.submittedById !== u.sub) {
-      c.executionCtx?.waitUntil(notifyUser(c.env, doc.submittedById, { title: `Your RA was ${word}`, body: String(doc.title ?? ''), url: '/requests?tab=ra' }))
+      c.executionCtx?.waitUntil(notify(c.env, doc.submittedById, u.tenant, { type: 'RA', event: ev, title: `Your RA was ${word}`, body: String(doc.title ?? ''), refType: 'RA', refId: doc.id, url: '/requests?tab=ra' }))
     }
     return c.json(doc)
   } catch {
@@ -205,6 +211,10 @@ function requestRoutes(kind: 'PPE' | 'RESOURCE', path: string) {
     const req = await prisma.pPERequest.create({
       data: { tenantId: u.tenant, userId: u.sub, type: kind, item: b.item, quantity: Number(b.quantity), reason: b.reason },
     })
+    c.executionCtx?.waitUntil((async () => {
+      const ids = (await labTeamIds(c.env, u.tenant)).filter((id) => id !== u.sub)
+      await notifyEach(c.env, ids, u.tenant, { type: kind, event: 'SUBMITTED', title: `New ${kind === 'PPE' ? 'PPE' : 'resource'} request`, body: `${b.item} ×${Number(b.quantity)}`, refType: kind, refId: req.id, url: `/requests?tab=${kind === 'PPE' ? 'ppe' : 'resource'}` })
+    })())
     return c.json(req, 201)
   })
 
@@ -220,6 +230,10 @@ function requestRoutes(kind: 'PPE' | 'RESOURCE', path: string) {
         where: { id: c.req.param('id') },
         data: { status: decision === 'approve' ? 'approved' : 'rejected' },
       })
+      if (req.userId && req.userId !== u.sub) {
+        const w = decision === 'approve' ? 'approved' : 'rejected'
+        c.executionCtx?.waitUntil(notify(c.env, req.userId, u.tenant, { type: kind, event: w.toUpperCase(), title: `Your ${kind === 'PPE' ? 'PPE' : 'resource'} request was ${w}`, body: String(req.item ?? ''), refType: kind, refId: req.id, url: `/requests?tab=${kind === 'PPE' ? 'ppe' : 'resource'}` }))
+      }
       return c.json(req)
     } catch {
       return c.json({ error: 'Not found' }, 404)
