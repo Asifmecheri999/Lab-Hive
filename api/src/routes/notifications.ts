@@ -36,6 +36,34 @@ notifications.post('/read-all', requireAuth, async (c) => {
   return c.json({ ok: true })
 })
 
+// Mark read every notification tied to one request (called when the user opens that
+// request's tile / detail). This is how the bell clears once an alert is "dealt with".
+notifications.post('/read-ref', requireAuth, async (c) => {
+  const prisma = getPrisma(c.env.DB)
+  const u = c.get('user')
+  const { refType, refId } = await c.req.json().catch(() => ({}))
+  if (!refId) return c.json({ error: 'refId is required' }, 400)
+  await prisma.notification.updateMany({
+    where: { userId: u.sub, refId: String(refId), ...(refType ? { refType: String(refType) } : {}), readAt: null },
+    data: { readAt: new Date() },
+  })
+  return c.json({ ok: true })
+})
+
+// Mark read every notification pointing at a section (by url prefix, e.g. "/approvals" or
+// "/procurement"). Called when the user opens that page — clears that section's bell badge.
+notifications.post('/read-url', requireAuth, async (c) => {
+  const prisma = getPrisma(c.env.DB)
+  const u = c.get('user')
+  const { urlPrefix } = await c.req.json().catch(() => ({}))
+  if (!urlPrefix) return c.json({ error: 'urlPrefix is required' }, 400)
+  await prisma.notification.updateMany({
+    where: { userId: u.sub, url: { startsWith: String(urlPrefix) }, readAt: null },
+    data: { readAt: new Date() },
+  })
+  return c.json({ ok: true })
+})
+
 // Mark one read (e.g. when the user clicks through to the request).
 notifications.post('/:id/read', requireAuth, async (c) => {
   const prisma = getPrisma(c.env.DB)

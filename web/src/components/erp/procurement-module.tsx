@@ -141,6 +141,12 @@ function ProcRequests({ token, role, email, kind }: { token: string; role: strin
     } catch (e) { setErr(String((e as Error).message)); } finally { setLoading(false); }
   }, [api]);
   useEffect(() => { load(); }, [load]);
+  // Opening Procurement clears its bell notifications (decision alerts on the requester's requests).
+  useEffect(() => {
+    api("/api/notifications/read-url", { method: "POST", body: JSON.stringify({ urlPrefix: "/procurement" }) })
+      .then(() => { try { window.dispatchEvent(new Event("labsynch:notif-refresh")); } catch { /* no-op */ } })
+      .catch(() => { /* best-effort */ });
+  }, [api]);
   function flash(m: string) { setToast(m); setTimeout(() => setToast(""), 2500); }
   const [approvers, setApprovers] = useState<{ id: string; name: string; email: string; role: string }[]>([]);
   const [defApprover, setDefApprover] = useState("");

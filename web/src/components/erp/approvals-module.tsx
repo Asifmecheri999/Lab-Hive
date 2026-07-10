@@ -42,6 +42,12 @@ export function ApprovalsModule({ token, email }: { token: string; role?: string
     setLoading(false);
   }, [api, email]);
   useEffect(() => { load(); }, [load]);
+  // Opening the Approvals page clears its bell notifications (the approver has now seen them).
+  useEffect(() => {
+    api("/api/notifications/read-url", { method: "POST", body: JSON.stringify({ urlPrefix: "/approvals" }) })
+      .then(() => { try { window.dispatchEvent(new Event("labsynch:notif-refresh")); } catch { /* no-op */ } })
+      .catch(() => { /* best-effort */ });
+  }, [api]);
   useEffect(() => { api("/api/auth/me").then((r) => (r.ok ? r.json() : null)).then((d) => setIsApprover(!!d?.isApprover)).catch(() => setIsApprover(false)); }, [api]);
   const flash = (m: string) => { setToast(m); setTimeout(() => setToast(""), 2500); };
 

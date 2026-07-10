@@ -119,6 +119,15 @@ export function RequestsModule({ token, role }: { token: string; role: string })
   const api = useCallback((p: string, i?: RequestInit) =>
     retryFetch(`${API_URL}${p}`, { ...i, headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}`, ...(i?.headers ?? {}) } }), [token]);
   const { counts, markSeen, isUnread, refresh } = useReqNotifications(api);
+  const refTypeOf = (key: ReqKey): string => (key === "jobs" ? "JOB" : key === "ra" ? "RA" : key === "ppe" ? "PPE" : key === "resource" ? "RESOURCE" : "ACCESS");
+  // Opening a tile: mark it seen locally AND clear its bell notifications on the server, then nudge
+  // the bell + sidebar to refresh — so a notification disappears the moment its request is dealt with.
+  const seenAndRead = useCallback((key: ReqKey, r: Row) => {
+    markSeen(key, r);
+    api("/api/notifications/read-ref", { method: "POST", body: JSON.stringify({ refType: refTypeOf(key), refId: String(r.id) }) })
+      .then(() => { try { window.dispatchEvent(new Event("labsynch:notif-refresh")); } catch { /* no-op */ } })
+      .catch(() => { /* best-effort */ });
+  }, [api, markSeen]);
   const searchParams = useSearchParams();
 
   // Deep-link from a notification: /requests?tab=ra&open=<id> opens the right tab + record.
@@ -160,11 +169,11 @@ export function RequestsModule({ token, role }: { token: string; role: string })
         <TabBtn id="access" label="Lab Access" />
       </div>
 
-      {tab === "jobs" && <JobRequests api={api} token={token} role={role} openId={openId} clearOpen={clearOpen} markSeen={(r) => markSeen("jobs", r)} isUnread={(r) => isUnread("jobs", r)} onChanged={refresh} />}
-      {tab === "ppe" && <PortalRequests api={api} token={token} role={role} variant="labcoat" openId={openId} clearOpen={clearOpen} markSeen={(r) => markSeen("ppe", r)} isUnread={(r) => isUnread("ppe", r)} onChanged={refresh} />}
-      {tab === "ra" && <RaSubmissions api={api} token={token} role={role} openId={openId} clearOpen={clearOpen} markSeen={(r) => markSeen("ra", r)} isUnread={(r) => isUnread("ra", r)} onChanged={refresh} />}
-      {tab === "resource" && <PortalRequests api={api} token={token} role={role} variant="borrowing" openId={openId} clearOpen={clearOpen} markSeen={(r) => markSeen("resource", r)} isUnread={(r) => isUnread("resource", r)} onChanged={refresh} />}
-      {tab === "access" && <PortalRequests api={api} token={token} role={role} variant="access" openId={openId} clearOpen={clearOpen} markSeen={(r) => markSeen("access", r)} isUnread={(r) => isUnread("access", r)} onChanged={refresh} />}
+      {tab === "jobs" && <JobRequests api={api} token={token} role={role} openId={openId} clearOpen={clearOpen} markSeen={(r) => seenAndRead("jobs", r)} isUnread={(r) => isUnread("jobs", r)} onChanged={refresh} />}
+      {tab === "ppe" && <PortalRequests api={api} token={token} role={role} variant="labcoat" openId={openId} clearOpen={clearOpen} markSeen={(r) => seenAndRead("ppe", r)} isUnread={(r) => isUnread("ppe", r)} onChanged={refresh} />}
+      {tab === "ra" && <RaSubmissions api={api} token={token} role={role} openId={openId} clearOpen={clearOpen} markSeen={(r) => seenAndRead("ra", r)} isUnread={(r) => isUnread("ra", r)} onChanged={refresh} />}
+      {tab === "resource" && <PortalRequests api={api} token={token} role={role} variant="borrowing" openId={openId} clearOpen={clearOpen} markSeen={(r) => seenAndRead("resource", r)} isUnread={(r) => isUnread("resource", r)} onChanged={refresh} />}
+      {tab === "access" && <PortalRequests api={api} token={token} role={role} variant="access" openId={openId} clearOpen={clearOpen} markSeen={(r) => seenAndRead("access", r)} isUnread={(r) => isUnread("access", r)} onChanged={refresh} />}
     </div>
   );
 }

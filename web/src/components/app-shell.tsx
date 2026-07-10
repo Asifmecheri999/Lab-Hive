@@ -84,9 +84,13 @@ export function AppShell({
     load();
     const iv = setInterval(load, 30000); // poll so new alerts (and the sound) arrive without a manual refresh
     const onWake = () => { if (!document.hidden) load(); }; // refresh when returning to the tab
+    // Pages dispatch this after they mark a request's notifications read (e.g. opening a tile),
+    // so the bell + sidebar badges update immediately instead of waiting for the next poll.
+    const onRefresh = () => load();
     window.addEventListener("focus", onWake);
     document.addEventListener("visibilitychange", onWake);
-    return () => { clearInterval(iv); ctrl.abort(); window.removeEventListener("focus", onWake); document.removeEventListener("visibilitychange", onWake); };
+    window.addEventListener("labsynch:notif-refresh", onRefresh);
+    return () => { clearInterval(iv); ctrl.abort(); window.removeEventListener("focus", onWake); document.removeEventListener("visibilitychange", onWake); window.removeEventListener("labsynch:notif-refresh", onRefresh); };
   }, [token]);
   // Chime when the unread count goes up (skips the first load so it doesn't ring on every page open).
   useEffect(() => {
@@ -112,6 +116,13 @@ export function AppShell({
   const isActive = (href: string) => pathname === href || pathname.startsWith(href + "/");
   const linkCls = (href: string) =>
     `block rounded-lg px-3 py-2 text-sm transition ${isActive(href) ? "bg-[#00C9A7] font-semibold text-[#0A1628]" : "text-gray-300 hover:bg-white/10 hover:text-white"}`;
+  // Unread notifications whose destination is this sidebar link (Requests / Approvals /
+  // Procurement / Activities …), matched on the notification's url path. Powers the green blink badge.
+  const countForHref = (href: string) => notifs.filter((n) => !n.readAt && (n.url || "").split("?")[0] === href).length;
+  const sectionBadge = (href: string) => {
+    const n = countForHref(href);
+    return n > 0 ? <span className="ml-2 animate-pulse rounded-full bg-[#00C9A7] px-1.5 text-[10px] font-bold text-[#0A1628]">{n}</span> : null;
+  };
 
   return (
     <div className="flex min-h-screen bg-gray-50">
@@ -124,16 +135,20 @@ export function AppShell({
           {user.superAdmin && <Link href="/platform" onClick={() => setNavOpen(false)} className={linkCls("/platform")}><span className="flex items-center gap-2">🏢 Platform</span></Link>}
           {sections.map((s, i) => {
             if (!s.heading) {
-              return <Fragment key={`s${i}`}>{s.items.map((it) => <Link key={it.href} href={it.href} onClick={() => setNavOpen(false)} className={linkCls(it.href)}><span className="flex items-center justify-between">{it.label}{it.href === "/requests" && unread > 0 && <span className="ml-2 rounded-full bg-red-500 px-1.5 text-[10px] font-bold text-white">{unread}</span>}</span></Link>)}</Fragment>;
+              return <Fragment key={`s${i}`}>{s.items.map((it) => <Link key={it.href} href={it.href} onClick={() => setNavOpen(false)} className={linkCls(it.href)}><span className="flex items-center justify-between">{it.label}{sectionBadge(it.href)}</span></Link>)}</Fragment>;
             }
             const open = collapsed[s.heading] !== true;
             return (
               <div key={s.heading} className="pt-1">
                 <button onClick={() => setCollapsed((p) => ({ ...p, [s.heading!]: open }))}
                   className="flex w-full items-center justify-between rounded-lg px-3 py-2 text-[11px] font-semibold uppercase tracking-wider text-gray-400 hover:text-white">
-                  <span>{s.heading}</span><span className="text-base leading-none">{open ? "−" : "+"}</span>
+                  <span>{s.heading}</span>
+                  <span className="flex items-center gap-1.5">
+                    {!open && (() => { const hc = s.items.reduce((a, it) => a + countForHref(it.href), 0); return hc > 0 ? <span className="animate-pulse rounded-full bg-[#00C9A7] px-1.5 text-[10px] font-bold text-[#0A1628]">{hc}</span> : null; })()}
+                    <span className="text-base leading-none">{open ? "−" : "+"}</span>
+                  </span>
                 </button>
-                {open && <div className="mt-0.5 space-y-1">{s.items.map((it) => <Link key={it.href} href={it.href} onClick={() => setNavOpen(false)} className={linkCls(it.href)}><span className="flex items-center justify-between">{it.label}{it.href === "/requests" && unread > 0 && <span className="ml-2 rounded-full bg-red-500 px-1.5 text-[10px] font-bold text-white">{unread}</span>}</span></Link>)}</div>}
+                {open && <div className="mt-0.5 space-y-1">{s.items.map((it) => <Link key={it.href} href={it.href} onClick={() => setNavOpen(false)} className={linkCls(it.href)}><span className="flex items-center justify-between">{it.label}{sectionBadge(it.href)}</span></Link>)}</div>}
               </div>
             );
           })}
@@ -214,7 +229,7 @@ export function AppShell({
       </div>
 
       <AssistantWidget token={token} role={user.role ?? ""} />
-      <IdleLogout idleMinutes={20} />
+      <IdleLogout idleMinutes={10} />
     </div>
   );
 }

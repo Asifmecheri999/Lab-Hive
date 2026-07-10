@@ -3,7 +3,7 @@ import { Hono } from 'hono'
 import type { Env } from '../lib/db'
 import { getPrisma } from '../lib/db'
 import { requireAuth, LAB_TEAM, type AuthVars } from '../middleware/auth'
-import { notify } from '../lib/notify'
+import { notifyEach, labTeamIds } from '../lib/notify'
 
 const comments = new Hono<{ Bindings: Env; Variables: AuthVars }>()
 
@@ -103,13 +103,22 @@ comments.post('/', requireAuth, async (c) => {
   if (b.refType === 'RA' && firstUrl && !LAB_TEAM.includes(u.role)) {
     await prisma.safetyDocument.updateMany({ where: { id: b.refId, tenantId: u.tenant, submittedById: u.sub }, data: { fileUrl: firstUrl, status: 'submitted' } }).catch(() => {})
   }
-  // Push notification to the request owner when someone else replies on their request.
+  // Notify the OTHER side of the thread. If a lab-team member replied, alert the request owner;
+  // if the requester (or a faculty supervisor) replied, alert the lab team — so student messages
+  // always reach staff and staff replies always reach the student.
   try {
     const ownerId = parent?.ownerId ?? null
-    if (ownerId && ownerId !== u.sub) {
-      const url = b.refType === 'RA' ? '/requests?tab=ra' : b.refType === 'JOB' ? '/requests?tab=jobs' : '/requests'
-      c.executionCtx?.waitUntil(notify(c.env, ownerId, u.tenant, { type: 'COMMENT', event: 'MESSAGE', title: `New message from ${u.name ?? 'the lab team'}`, body: String(b.body ?? 'Sent a file'), refType: String(b.refType), refId: String(b.refId), url }))
-    }
+    const url = b.refType === 'RA' ? '/requests?tab=ra' : b.refType === 'JOB' ? '/requests?tab=jobs' : '/requests'
+    const payload = { type: 'COMMENT', event: 'MESSAGE', title: `New message from ${u.name ?? 'someone'}`, body: String(b.body ?? 'Sent a file'), refType: String(b.refType), refId: String(b.refId), url }
+    c.executionCtx?.waitUntil((async () => {
+      const recipients = new Set<string>()
+      if (ownerId && ownerId !== u.sub) recipients.add(ownerId)               // reply reaches the request owner
+      if (!STAFF.includes(u.role)) {                                          // requester/faculty replied → alert the lab team
+        for (const id of await labTeamIds(c.env, u.tenant ?? undefined)) recipients.add(id)
+      }
+      recipients.delete(u.sub)                                               // never notify the author
+      await notifyEach(c.env, [...recipients], u.tenant ?? undefined, payload)
+    })())
   } catch { /* notifications are best-effort */ }
   return c.json(comment, 201)
 })

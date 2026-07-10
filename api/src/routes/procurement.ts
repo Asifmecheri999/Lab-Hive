@@ -5,6 +5,7 @@ import type { Env } from '../lib/db'
 import { getPrisma } from '../lib/db'
 import { requireAuth, requireRole, LAB_TEAM, APPROVERS, type AuthVars } from '../middleware/auth'
 import { sendEmail, mailLayout, mailButton, mailPanel } from '../lib/email'
+import { notify } from '../lib/notify'
 
 const ALL_LAB = [...LAB_TEAM, 'HEAD_OF_SCHOOL', 'DEAN', 'ADMIN']
 const APP_URL = 'https://labsynch.com'
@@ -169,19 +170,28 @@ procurement.patch('/:id/status', requireAuth, async (c) => {
   } })
 
   // Notifications (best-effort, sent in the background so the status change returns immediately).
+  // Each side gets BOTH an email AND an in-app bell notification (the reliable, persisted one).
   c.executionCtx?.waitUntil((async () => {
     try {
       if (status === 'submitted' && req.approverEmail) {
         await sendEmail(c.env, { to: req.approverEmail, subject: `Approval needed — ${req.title}`,
           html: mailLayout('A purchase request needs your approval', `<p style="margin:0 0 4px;"><b>${req.title}</b> has been submitted for your approval.</p><p style="margin:0;">Review the details and approve, hold, or reject it:</p>${mailButton(`${APP_URL}/approvals`, 'Review the request')}`, `Approval needed: ${req.title}`),
           text: `${req.title} needs your approval. Review at ${APP_URL}/approvals` })
+        // Bell alert to the routed approver (so faculty approvers see it in-app, not only by email).
+        const approver = await prisma.user.findFirst({ where: { tenantId: req.tenantId ?? undefined, email: req.approverEmail }, select: { id: true } })
+        if (approver?.id && approver.id !== u.sub) await notify(c.env, approver.id, req.tenantId ?? undefined, { type: 'PROCUREMENT', event: 'SUBMITTED', title: `Approval needed: ${req.title}`, body: 'A purchase request needs your decision.', refType: 'PROCUREMENT', refId: req.id, url: '/approvals' })
       } else if (isDecision && req.submittedById) {
         const creator = await prisma.user.findUnique({ where: { id: req.submittedById }, select: { email: true } })
         if (creator?.email) await sendEmail(c.env, { to: creator.email, subject: `Purchase request ${status} — ${req.title}`,
           html: mailLayout(`Purchase request ${status.replace('_', ' ')}`, `<p style="margin:0 0 8px;">Your purchase request <b>${req.title}</b> was <b>${status.replace('_', ' ')}</b>${u.name ? ` by ${u.name}` : ''}.</p>${note ? mailPanel(`<b>Message:</b> ${String(note)}`) : ''}${status === 'approved' ? mailButton(`${APP_URL}/procurement`, 'Proceed to order') : ''}`, `Your request was ${status.replace('_', ' ')}`),
           text: `Your purchase request "${req.title}" was ${status}.${note ? ` Message: ${String(note)}` : ''}` })
+        // Bell alert to the person who raised the request.
+        if (req.submittedById !== u.sub) {
+          const ev = status === 'approved' ? 'APPROVED' : status === 'rejected' ? 'REJECTED' : 'HOLD'
+          await notify(c.env, req.submittedById, req.tenantId ?? undefined, { type: 'PROCUREMENT', event: ev, title: `Purchase request ${status.replace('_', ' ')}: ${req.title}`, body: note ? String(note) : '', refType: 'PROCUREMENT', refId: req.id, url: '/procurement' })
+        }
       }
-    } catch { /* email is best-effort */ }
+    } catch { /* email + notification are best-effort */ }
   })())
   return c.json(p)
 })
