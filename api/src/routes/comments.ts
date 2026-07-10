@@ -9,13 +9,14 @@ const comments = new Hono<{ Bindings: Env; Variables: AuthVars }>()
 
 const STAFF = ['LAB_TECHNICIAN', 'LAB_COORDINATOR', 'LAB_MANAGER', 'ADMIN', 'DEAN', 'HEAD_OF_SCHOOL']
 
-type Parent = { tenantId: string | null; ownerId: string | null; supervisor: string | null } | null
+type Parent = { tenantId: string | null; ownerId: string | null; supervisor: string | null; title: string | null } | null
 type AuthedUser = { sub: string; tenant: string | null; role: string; email?: string | null; name?: string | null }
-// Load the request a thread hangs off (tenant + owner), so we can authorize access.
+// Load the request a thread hangs off (tenant + owner + a human title), so we can authorize
+// access AND tell the recipient which request a new message belongs to.
 async function parentOf(prisma: ReturnType<typeof getPrisma>, refType: string, refId: string): Promise<Parent> {
-  if (refType === 'JOB') { const r = await prisma.serviceRequest.findUnique({ where: { id: refId }, select: { tenantId: true, userId: true } }); return r ? { tenantId: r.tenantId, ownerId: r.userId, supervisor: null } : null }
-  if (refType === 'PORTAL') { const r = await prisma.portalRequest.findUnique({ where: { id: refId }, select: { tenantId: true, userId: true } }); return r ? { tenantId: r.tenantId, ownerId: r.userId, supervisor: null } : null }
-  if (refType === 'RA') { const r = await prisma.safetyDocument.findUnique({ where: { id: refId }, select: { tenantId: true, submittedById: true, supervisor: true } }); return r ? { tenantId: r.tenantId, ownerId: r.submittedById, supervisor: r.supervisor } : null }
+  if (refType === 'JOB') { const r = await prisma.serviceRequest.findUnique({ where: { id: refId }, select: { tenantId: true, userId: true, title: true } }); return r ? { tenantId: r.tenantId, ownerId: r.userId, supervisor: null, title: r.title } : null }
+  if (refType === 'PORTAL') { const r = await prisma.portalRequest.findUnique({ where: { id: refId }, select: { tenantId: true, userId: true, kind: true } }); return r ? { tenantId: r.tenantId, ownerId: r.userId, supervisor: null, title: r.kind === 'PPE' ? 'PPE request' : r.kind === 'ACCESS' ? 'Lab access request' : 'Resource request' } : null }
+  if (refType === 'RA') { const r = await prisma.safetyDocument.findUnique({ where: { id: refId }, select: { tenantId: true, submittedById: true, supervisor: true, title: true } }); return r ? { tenantId: r.tenantId, ownerId: r.submittedById, supervisor: r.supervisor, title: r.title } : null }
   return null
 }
 // Staff (lab team + leadership + faculty reviewers) see any thread in their tenant; others only their own requests.
@@ -103,19 +104,18 @@ comments.post('/', requireAuth, async (c) => {
   if (b.refType === 'RA' && firstUrl && !LAB_TEAM.includes(u.role)) {
     await prisma.safetyDocument.updateMany({ where: { id: b.refId, tenantId: u.tenant, submittedById: u.sub }, data: { fileUrl: firstUrl, status: 'submitted' } }).catch(() => {})
   }
-  // Notify the OTHER side of the thread. If a lab-team member replied, alert the request owner;
-  // if the requester (or a faculty supervisor) replied, alert the lab team — so student messages
-  // always reach staff and staff replies always reach the student.
+  // Notify everyone on the thread except the author: the request owner AND the whole lab team
+  // (so admins/coordinators see student messages too, not just the one handler). The title names
+  // the request so recipients know which one the message is about; the tile lights up via refId.
   try {
     const ownerId = parent?.ownerId ?? null
     const url = b.refType === 'RA' ? '/requests?tab=ra' : b.refType === 'JOB' ? '/requests?tab=jobs' : '/requests'
-    const payload = { type: 'COMMENT', event: 'MESSAGE', title: `New message from ${u.name ?? 'someone'}`, body: String(b.body ?? 'Sent a file'), refType: String(b.refType), refId: String(b.refId), url }
+    const label = parent?.title ? String(parent.title) : 'your request'
+    const payload = { type: 'COMMENT', event: 'MESSAGE', title: `New message: ${label}`, body: `${u.name ?? 'Someone'}: ${String(b.body ?? 'Sent a file')}`, refType: String(b.refType), refId: String(b.refId), url }
     c.executionCtx?.waitUntil((async () => {
       const recipients = new Set<string>()
-      if (ownerId && ownerId !== u.sub) recipients.add(ownerId)               // reply reaches the request owner
-      if (!STAFF.includes(u.role)) {                                          // requester/faculty replied → alert the lab team
-        for (const id of await labTeamIds(c.env, u.tenant ?? undefined)) recipients.add(id)
-      }
+      if (ownerId) recipients.add(ownerId)                                    // the person who raised the request
+      for (const id of await labTeamIds(c.env, u.tenant ?? undefined)) recipients.add(id) // the whole lab team
       recipients.delete(u.sub)                                               // never notify the author
       await notifyEach(c.env, [...recipients], u.tenant ?? undefined, payload)
     })())

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { signOut } from "next-auth/react";
 import { Window, Button } from "./window";
@@ -33,66 +33,63 @@ const STATUS_META: Record<string, { l: string; c: string }> = {
 };
 const statusBadge = (s: string) => STATUS_META[s] ?? { l: s, c: "bg-gray-100 text-gray-600" };
 
-// A request "signature" changes when the item is new or gets updated (status /
-// approval). Jobs include the approval count; portal + RA use status + timestamp.
-const sigJob = (r: Row) => `${r.id}:${r.updatedAt ?? r.createdAt ?? ""}:${r.status ?? ""}:${((r.approvals as unknown[]) ?? []).length}`;
-const sigPortal = (r: Row) => `${r.id}:${r.updatedAt ?? r.createdAt ?? ""}:${r.status ?? ""}`;
-const sigRa = (r: Row) => `${r.id}:${r.updatedAt ?? r.createdAt ?? ""}:${r.status ?? ""}`;
+// Unread state now comes from the SERVER notification store (the same source as the bell),
+// keyed to the request each notification points at — so the tab counts, tile glow, bell and
+// sidebar always agree and clear together. The tab list just needs each type's endpoint.
 type ReqKey = "jobs" | "ra" | "ppe" | "resource" | "access";
-const REQ_TYPES: { key: ReqKey; path: string; sig: (r: Row) => string }[] = [
-  { key: "jobs", path: "/api/requests", sig: sigJob },
-  { key: "ra", path: "/api/safety/ra", sig: sigRa },
-  { key: "ppe", path: "/api/portal-requests?kind=PPE", sig: sigPortal },
-  { key: "resource", path: "/api/portal-requests?kind=RESOURCE", sig: sigPortal },
-  { key: "access", path: "/api/portal-requests?kind=ACCESS", sig: sigPortal },
+type Notif = { id: string; type?: string; refId?: string | null; readAt?: string | null };
+const REQ_TYPES: { key: ReqKey; path: string }[] = [
+  { key: "jobs", path: "/api/requests" },
+  { key: "ra", path: "/api/safety/ra" },
+  { key: "ppe", path: "/api/portal-requests?kind=PPE" },
+  { key: "resource", path: "/api/portal-requests?kind=RESOURCE" },
+  { key: "access", path: "/api/portal-requests?kind=ACCESS" },
 ];
-const SIG_OF: Record<ReqKey, (r: Row) => string> = { jobs: sigJob, ra: sigRa, ppe: sigPortal, resource: sigPortal, access: sigPortal };
 
-// Cross-tab request NOTIFICATIONS (not a running total). The badge stays (0) until
-// something actually needs attention — a brand-new request or an update (status /
-// approval change) that the user hasn't opened yet. Opening the tile clears it;
-// that specific tile also glows until opened. On the very first load we baseline
-// the current state as "seen", so the existing backlog does NOT light up — only
-// things that arrive or change afterwards do. Persisted per user; polls to stay
-// fresh. Same behaviour for students, faculty and admins.
-const SEEN_KEY = "labsynch.reqseen.v3";
+// Request unread state, read from the SERVER notification store (same source as the bell).
+// A request "needs attention" iff the user has an unread notification pointing at it (refId).
+// So a badge only shows when a real notification exists, and opening the request — which marks
+// its notifications read — makes the badge, tile glow and bell entry all disappear together.
 function useReqNotifications(api: (p: string, i?: RequestInit) => Promise<Response>) {
   const [data, setData] = useState<Record<ReqKey, Row[]>>({ jobs: [], ra: [], ppe: [], resource: [], access: [] });
-  const [seen, setSeen] = useState<Set<string>>(() => { try { return new Set<string>(JSON.parse(localStorage.getItem(SEEN_KEY) ?? "[]")); } catch { return new Set<string>(); } });
-  const baselined = useRef<boolean>((() => { try { return localStorage.getItem(SEEN_KEY) !== null; } catch { return false; } })());
+  const [notifs, setNotifs] = useState<Notif[]>([]);
   const load = useCallback(async () => {
     const results = await Promise.all(REQ_TYPES.map((t) => api(t.path).then((r) => (r.ok ? r.json() : [])).catch(() => [])));
     setData((prev) => { const next = { ...prev }; REQ_TYPES.forEach((t, i) => { next[t.key] = Array.isArray(results[i]) ? results[i] : []; }); return next; });
+    const nr = await api("/api/notifications").then((r) => (r.ok ? r.json() : null)).catch(() => null);
+    setNotifs(nr && Array.isArray(nr.items) ? nr.items : []);
   }, [api]);
   useEffect(() => {
     load();
     const iv = setInterval(load, 30000);
-    // Also refresh the moment the user returns to this tab/window, so the badges
-    // are up to date immediately instead of waiting for the next poll.
+    // Refresh on tab focus AND whenever a page marks notifications read (opening a tile / page),
+    // so counts and the bell stay in lock-step without waiting for the next poll.
     const onWake = () => { if (!document.hidden) load(); };
+    const onRefresh = () => load();
     window.addEventListener("focus", onWake);
     document.addEventListener("visibilitychange", onWake);
-    return () => { clearInterval(iv); window.removeEventListener("focus", onWake); document.removeEventListener("visibilitychange", onWake); };
+    window.addEventListener("labsynch:notif-refresh", onRefresh);
+    return () => { clearInterval(iv); window.removeEventListener("focus", onWake); document.removeEventListener("visibilitychange", onWake); window.removeEventListener("labsynch:notif-refresh", onRefresh); };
   }, [load]);
-  // First data load ever → treat everything already there as acknowledged, so the
-  // badges start at (0) and only rise for genuinely new/updated items after this.
-  useEffect(() => {
-    if (baselined.current) return;
-    const all = REQ_TYPES.flatMap((t) => data[t.key].map((r) => t.sig(r)));
-    if (all.length === 0) return; // wait for the first real data
-    baselined.current = true;
-    const s = new Set(all);
-    setSeen(s);
-    try { localStorage.setItem(SEEN_KEY, JSON.stringify([...s])); } catch { /* quota */ }
-  }, [data]);
-  const markSeen = useCallback((key: ReqKey, r: Row) => {
-    const s = SIG_OF[key](r);
-    setSeen((prev) => { if (prev.has(s)) return prev; const n = new Set(prev); n.add(s); try { localStorage.setItem(SEEN_KEY, JSON.stringify([...n])); } catch { /* quota */ } return n; });
+  // Index unread notifications by the request they belong to: count + whether any is a message.
+  const unread = new Map<string, { n: number; msg: boolean }>();
+  notifs.forEach((x) => {
+    if (x.readAt || !x.refId) return;
+    const cur = unread.get(String(x.refId)) ?? { n: 0, msg: false };
+    cur.n += 1;
+    if (String(x.type) === "COMMENT") cur.msg = true;
+    unread.set(String(x.refId), cur);
+  });
+  // Optimistically clear a request's unread the instant its tile opens (the server read-ref
+  // + next poll then keep it cleared), so the UI feels immediate.
+  const markReadLocal = useCallback((refId: string) => {
+    setNotifs((prev) => prev.map((x) => (String(x.refId) === String(refId) ? { ...x, readAt: "1" } : x)));
   }, []);
-  const isUnread = useCallback((key: ReqKey, r: Row) => !seen.has(SIG_OF[key](r)), [seen]);
+  const isUnread = (_key: ReqKey, r: Row) => unread.has(String(r.id));
+  const hasMessage = (r: Row) => !!unread.get(String(r.id))?.msg;
   const counts: Record<string, number> = {};
-  REQ_TYPES.forEach((t) => { counts[t.key] = data[t.key].reduce((n, r) => (seen.has(t.sig(r)) ? n : n + 1), 0); });
-  return { counts, markSeen, isUnread, refresh: load };
+  REQ_TYPES.forEach((t) => { counts[t.key] = data[t.key].reduce((n, r) => (unread.has(String(r.id)) ? n + 1 : n), 0); });
+  return { counts, isUnread, hasMessage, markReadLocal, refresh: load };
 }
 
 // Tile ring — teal glow when the item needs attention (new/updated), plain otherwise.
@@ -118,16 +115,16 @@ export function RequestsModule({ token, role }: { token: string; role: string })
   const [openId, setOpenId] = useState("");
   const api = useCallback((p: string, i?: RequestInit) =>
     retryFetch(`${API_URL}${p}`, { ...i, headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}`, ...(i?.headers ?? {}) } }), [token]);
-  const { counts, markSeen, isUnread, refresh } = useReqNotifications(api);
+  const { counts, isUnread, hasMessage, markReadLocal, refresh } = useReqNotifications(api);
   const refTypeOf = (key: ReqKey): string => (key === "jobs" ? "JOB" : key === "ra" ? "RA" : key === "ppe" ? "PPE" : key === "resource" ? "RESOURCE" : "ACCESS");
-  // Opening a tile: mark it seen locally AND clear its bell notifications on the server, then nudge
-  // the bell + sidebar to refresh — so a notification disappears the moment its request is dealt with.
+  // Opening a tile clears that request's notifications: hide them locally at once, tell the server
+  // (read-ref), then nudge the bell + sidebar to refresh — so the alert disappears everywhere.
   const seenAndRead = useCallback((key: ReqKey, r: Row) => {
-    markSeen(key, r);
+    markReadLocal(String(r.id));
     api("/api/notifications/read-ref", { method: "POST", body: JSON.stringify({ refType: refTypeOf(key), refId: String(r.id) }) })
       .then(() => { try { window.dispatchEvent(new Event("labsynch:notif-refresh")); } catch { /* no-op */ } })
       .catch(() => { /* best-effort */ });
-  }, [api, markSeen]);
+  }, [api, markReadLocal]);
   const searchParams = useSearchParams();
 
   // Deep-link from a notification: /requests?tab=ra&open=<id> opens the right tab + record.
@@ -148,9 +145,11 @@ export function RequestsModule({ token, role }: { token: string; role: string })
 
   const TabBtn = ({ id, label }: { id: typeof tab; label: string }) => {
     const n = counts[id] ?? 0;
+    // Standard badge: a count appears only when there's genuine unread activity, and clears
+    // once those requests are opened. No badge at all when there's nothing to see.
     return (
       <button onClick={() => setTab(id)} className={`select-none rounded-lg px-4 py-2 text-sm font-medium transition ${tab === id ? "bg-[#0A1628] text-white" : "text-gray-600 hover:bg-gray-100"}`}>
-        {label} <span className={`ml-0.5 text-sm font-bold ${tab === id ? "text-[#00C9A7]" : n > 0 ? "text-[#0a8d75]" : "text-gray-400"}`}>({n})</span>
+        {label}{n > 0 ? <span className={`ml-1.5 animate-pulse rounded-full px-1.5 py-0.5 text-[11px] font-bold tabular-nums ${tab === id ? "bg-[#00C9A7] text-[#0A1628]" : "bg-[#00C9A7]/15 text-[#0a8d75]"}`}>{n}</span> : null}
       </button>
     );
   };
@@ -169,17 +168,17 @@ export function RequestsModule({ token, role }: { token: string; role: string })
         <TabBtn id="access" label="Lab Access" />
       </div>
 
-      {tab === "jobs" && <JobRequests api={api} token={token} role={role} openId={openId} clearOpen={clearOpen} markSeen={(r) => seenAndRead("jobs", r)} isUnread={(r) => isUnread("jobs", r)} onChanged={refresh} />}
-      {tab === "ppe" && <PortalRequests api={api} token={token} role={role} variant="labcoat" openId={openId} clearOpen={clearOpen} markSeen={(r) => seenAndRead("ppe", r)} isUnread={(r) => isUnread("ppe", r)} onChanged={refresh} />}
-      {tab === "ra" && <RaSubmissions api={api} token={token} role={role} openId={openId} clearOpen={clearOpen} markSeen={(r) => seenAndRead("ra", r)} isUnread={(r) => isUnread("ra", r)} onChanged={refresh} />}
-      {tab === "resource" && <PortalRequests api={api} token={token} role={role} variant="borrowing" openId={openId} clearOpen={clearOpen} markSeen={(r) => seenAndRead("resource", r)} isUnread={(r) => isUnread("resource", r)} onChanged={refresh} />}
-      {tab === "access" && <PortalRequests api={api} token={token} role={role} variant="access" openId={openId} clearOpen={clearOpen} markSeen={(r) => seenAndRead("access", r)} isUnread={(r) => isUnread("access", r)} onChanged={refresh} />}
+      {tab === "jobs" && <JobRequests api={api} token={token} role={role} openId={openId} clearOpen={clearOpen} markSeen={(r) => seenAndRead("jobs", r)} isUnread={(r) => isUnread("jobs", r)} hasMessage={hasMessage} onChanged={refresh} />}
+      {tab === "ppe" && <PortalRequests api={api} token={token} role={role} variant="labcoat" openId={openId} clearOpen={clearOpen} markSeen={(r) => seenAndRead("ppe", r)} isUnread={(r) => isUnread("ppe", r)} hasMessage={hasMessage} onChanged={refresh} />}
+      {tab === "ra" && <RaSubmissions api={api} token={token} role={role} openId={openId} clearOpen={clearOpen} markSeen={(r) => seenAndRead("ra", r)} isUnread={(r) => isUnread("ra", r)} hasMessage={hasMessage} onChanged={refresh} />}
+      {tab === "resource" && <PortalRequests api={api} token={token} role={role} variant="borrowing" openId={openId} clearOpen={clearOpen} markSeen={(r) => seenAndRead("resource", r)} isUnread={(r) => isUnread("resource", r)} hasMessage={hasMessage} onChanged={refresh} />}
+      {tab === "access" && <PortalRequests api={api} token={token} role={role} variant="access" openId={openId} clearOpen={clearOpen} markSeen={(r) => seenAndRead("access", r)} isUnread={(r) => isUnread("access", r)} hasMessage={hasMessage} onChanged={refresh} />}
     </div>
   );
 }
 
 // ───────────────────────── Job Requests ─────────────────────────
-function JobRequests({ api, token, role, openId, clearOpen, markSeen, isUnread, onChanged }: { api: (p: string, i?: RequestInit) => Promise<Response>; token: string; role: string; openId?: string; clearOpen?: () => void; markSeen: (r: Row) => void; isUnread?: (r: Row) => boolean; onChanged?: () => void }) {
+function JobRequests({ api, token, role, openId, clearOpen, markSeen, isUnread, hasMessage, onChanged }: { api: (p: string, i?: RequestInit) => Promise<Response>; token: string; role: string; openId?: string; clearOpen?: () => void; markSeen: (r: Row) => void; isUnread?: (r: Row) => boolean; hasMessage?: (r: Row) => boolean; onChanged?: () => void }) {
   // Faculty submit their own job requests but do NOT review students' — treat them
   // as a submitter here (own list + "+ New request"), never a decider/processor.
   const canDecide = DECISION.includes(role) && role !== "FACULTY";
@@ -249,6 +248,7 @@ function JobRequests({ api, token, role, openId, clearOpen, markSeen, isUnread, 
                     <h3 className="font-semibold text-[#0A1628]">{String(r.title)}</h3>
                     <span className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-semibold ${b.c}`}>{b.l}</span>
                   </div>
+                  {hasMessage?.(r) && <p className="mt-2 inline-flex items-center gap-1 rounded-full bg-[#00C9A7]/15 px-2 py-0.5 text-[11px] font-semibold text-[#0a8d75]">💬 New message</p>}
                   <p className="mt-1 text-xs text-gray-500">{[jobTypeLabel(String(r.type)), (r.user as { name?: string })?.name].filter(Boolean).join(" · ")}</p>
                   {r.createdAt ? <p className="mt-0.5 text-[11px] text-gray-400">Submitted {fmtWhen(r.createdAt)}</p> : null}
                   {(() => { const ln = ((r.approvals as Row[]) ?? []).filter((a) => a.comments).slice(-1)[0]?.comments; return ln ? <p className="mt-2 rounded bg-gray-50 px-2 py-1 text-xs text-gray-600">💬 {String(ln)}</p> : null; })()}
@@ -463,7 +463,7 @@ function PpeOptionsEditor({ api }: { api: (p: string, i?: RequestInit) => Promis
   );
 }
 
-function PortalRequests({ api, token, role, variant, openId, clearOpen, markSeen, isUnread, onChanged }: { api: (p: string, i?: RequestInit) => Promise<Response>; token: string; role: string; variant: Variant; openId?: string; clearOpen?: () => void; markSeen: (r: Row) => void; isUnread?: (r: Row) => boolean; onChanged?: () => void }) {
+function PortalRequests({ api, token, role, variant, openId, clearOpen, markSeen, isUnread, hasMessage, onChanged }: { api: (p: string, i?: RequestInit) => Promise<Response>; token: string; role: string; variant: Variant; openId?: string; clearOpen?: () => void; markSeen: (r: Row) => void; isUnread?: (r: Row) => boolean; hasMessage?: (r: Row) => boolean; onChanged?: () => void }) {
   const kind = variant === "labcoat" ? "PPE" : variant === "borrowing" ? "RESOURCE" : "ACCESS";
   const canReview = LAB_TEAM.includes(role);
   const [rows, setRows] = useState<Row[]>([]);
@@ -520,6 +520,7 @@ function PortalRequests({ api, token, role, variant, openId, clearOpen, markSeen
                     <h3 className="font-semibold text-[#0A1628]">{title}</h3>
                     <span className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-semibold ${st.c}`}>{st.l}</span>
                   </div>
+                  {hasMessage?.(r) && <p className="mt-2 inline-flex items-center gap-1 rounded-full bg-[#00C9A7]/15 px-2 py-0.5 text-[11px] font-semibold text-[#0a8d75]">💬 New message</p>}
                   <p className="mt-1 truncate text-xs text-gray-500">{sub}</p>
                   {r.submitterName ? <p className="mt-0.5 text-xs text-gray-400">{String(r.submitterName)}</p> : null}
                   {r.createdAt ? <p className="mt-0.5 text-[11px] text-gray-400">Submitted {fmtWhen(r.createdAt)}</p> : null}
@@ -858,7 +859,7 @@ function Thread({ api, token, refType, refId }: { api: (p: string, i?: RequestIn
   );
 }
 
-function RaSubmissions({ api, token, role, openId, clearOpen, markSeen, isUnread, onChanged }: { api: (p: string, i?: RequestInit) => Promise<Response>; token: string; role: string; openId?: string; clearOpen?: () => void; markSeen: (r: Row) => void; isUnread?: (r: Row) => boolean; onChanged?: () => void }) {
+function RaSubmissions({ api, token, role, openId, clearOpen, markSeen, isUnread, hasMessage, onChanged }: { api: (p: string, i?: RequestInit) => Promise<Response>; token: string; role: string; openId?: string; clearOpen?: () => void; markSeen: (r: Row) => void; isUnread?: (r: Row) => boolean; hasMessage?: (r: Row) => boolean; onChanged?: () => void }) {
   const canReview = LAB_TEAM.includes(role);
   const [subs, setSubs] = useState<Row[]>([]);
   const [templates, setTemplates] = useState<Row[]>([]);
@@ -950,6 +951,7 @@ function RaSubmissions({ api, token, role, openId, clearOpen, markSeen, isUnread
                     <h3 className="font-semibold text-[#0A1628]">{String(s.title)}</h3>
                     <span className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-semibold ${st.c}`}>{st.l}</span>
                   </div>
+                  {hasMessage?.(s) && <p className="mt-2 inline-flex items-center gap-1 rounded-full bg-[#00C9A7]/15 px-2 py-0.5 text-[11px] font-semibold text-[#0a8d75]">💬 New message</p>}
                   <p className="mt-1 text-xs text-gray-500">{[String(s.project ?? ""), String(s.submittedByName ?? ""), s.supervisor ? `Supervisor: ${String(s.supervisor)}` : ""].filter(Boolean).join(" · ") || "—"}</p>
                   {s.createdAt ? <p className="mt-0.5 text-[11px] text-gray-400">Submitted {fmtWhen(s.createdAt)}</p> : null}
                   <p className="mt-2 text-xs font-semibold text-gray-400">Open ›</p>
